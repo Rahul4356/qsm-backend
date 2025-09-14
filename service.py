@@ -54,7 +54,7 @@ try:
             if path not in sys.path:
                 sys.path.insert(0, path)
     
-    import oqs
+    import oqs  # type: ignore # pylint: disable=import-error
     
     # Verify oqs has required functions
     if hasattr(oqs, 'KeyEncapsulation') and hasattr(oqs, 'Signature'):
@@ -92,10 +92,9 @@ except ImportError as e:
 except Exception as e:
     print(f"⚠️ Error loading liboqs: {e} - using simulation mode")
     QUANTUM_READY = False
-    print("⚠️ Using quantum-resistant simulation mode")
-except Exception as e:
-    print(f"⚠️ Error loading liboqs: {e}")
-    print("⚠️ Using quantum-resistant simulation mode")
+
+print(f"🔧 Quantum Service Mode: {'REAL' if QUANTUM_READY else 'SIMULATION'}")
+print(f"🔧 Version: {QUANTUM_VERSION}")
 
 # Configure extensive logging
 logging.basicConfig(
