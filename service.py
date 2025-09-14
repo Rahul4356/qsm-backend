@@ -32,23 +32,25 @@ from cryptography.hazmat.primitives import hmac
 
 # Try to import real quantum library with multiple fallbacks
 QUANTUM_READY = False
-QUANTUM_VERSION = "Unknown"
+# Global configuration
+QUANTUM_READY = False
+QUANTUM_VERSION = "Simulation Mode - liboqs not available"
 AVAILABLE_KEMS = []
 AVAILABLE_SIGS = []
 
 # Try different import methods for liboqs
 try:
-    # Try adding common installation paths
+    # Try adding common installation paths (mainly for Windows/local development)
     possible_paths = [
         r"C:\Users\lx199\Desktop\quantum\liboqs\install\bin",
-        r"C:\Users\lx199\Desktop\quantum\liboqs-python",
+        r"C:\Users\lx199\Desktop\quantum\liboqs-python", 
         r"C:\Program Files\liboqs\bin",
         r"C:\liboqs\bin",
     ]
     
     for path in possible_paths:
-        if os.path.exists(path) and path not in os.environ['PATH']:
-            os.environ['PATH'] = path + ';' + os.environ['PATH']
+        if os.path.exists(path) and path not in os.environ.get('PATH', ''):
+            os.environ['PATH'] = path + os.pathsep + os.environ.get('PATH', '')
             if path not in sys.path:
                 sys.path.insert(0, path)
     
@@ -80,9 +82,16 @@ try:
             print("✅ ML-KEM-768 (Kyber768) available")
         if "Falcon-512" in AVAILABLE_SIGS:
             print("✅ Falcon-512 available")
+    else:
+        print("⚠️ liboqs loaded but missing required functions - using simulation mode")
+        QUANTUM_READY = False
             
 except ImportError as e:
-    print(f"⚠️ liboqs not available: {e}")
+    print(f"⚠️ liboqs not available: {e} - using simulation mode")
+    QUANTUM_READY = False
+except Exception as e:
+    print(f"⚠️ Error loading liboqs: {e} - using simulation mode")
+    QUANTUM_READY = False
     print("⚠️ Using quantum-resistant simulation mode")
 except Exception as e:
     print(f"⚠️ Error loading liboqs: {e}")
