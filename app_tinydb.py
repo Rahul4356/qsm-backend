@@ -40,7 +40,14 @@ print("All imports successful!", file=sys.stderr)
 
 # Azure Environment Configuration
 IS_PRODUCTION = os.environ.get("WEBSITE_SITE_NAME") is not None
-DB_PATH = os.environ.get("DB_PATH", "/tmp/qms_database.json")
+
+# Use Azure-friendly database path
+if IS_PRODUCTION:
+    # In Azure, use local storage directory
+    DB_PATH = os.environ.get("DB_PATH", "/home/site/wwwroot/qms_database.json")
+else:
+    # Local development
+    DB_PATH = os.environ.get("DB_PATH", "/tmp/qms_database.json")
 
 # Security configuration
 SECRET_KEY = os.environ.get("JWT_SECRET", "quantum-secure-default-key-change-this-in-production")
@@ -50,24 +57,46 @@ BCRYPT_ROUNDS = int(os.environ.get("BCRYPT_ROUNDS", "12"))
 
 # ========== DATABASE SETUP ==========
 
-# Initialize TinyDB
-db = TinyDB(DB_PATH, storage=CachingMiddleware(JSONStorage))
-
-# Define tables
-users_table = db.table('users')
-connection_requests_table = db.table('connection_requests')
-secure_sessions_table = db.table('secure_sessions')
-messages_table = db.table('messages')
-audit_logs_table = db.table('audit_logs')
-
-# Query objects
-UserQuery = Query()
-ConnectionRequestQuery = Query()
-SecureSessionQuery = Query()
-MessageQuery = Query()
-AuditLogQuery = Query()
-
-print("TinyDB database initialized successfully", file=sys.stderr)
+# Initialize TinyDB with error handling
+try:
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db = TinyDB(DB_PATH, storage=CachingMiddleware(JSONStorage))
+    
+    # Define tables
+    users_table = db.table('users')
+    connection_requests_table = db.table('connection_requests')
+    secure_sessions_table = db.table('secure_sessions')
+    messages_table = db.table('messages')
+    audit_logs_table = db.table('audit_logs')
+    
+    # Query objects
+    UserQuery = Query()
+    ConnectionRequestQuery = Query()
+    SecureSessionQuery = Query()
+    MessageQuery = Query()
+    AuditLogQuery = Query()
+    
+    print(f"TinyDB database initialized successfully at: {DB_PATH}", file=sys.stderr)
+    
+except Exception as e:
+    print(f"Database initialization error: {e}", file=sys.stderr)
+    # Fallback to in-memory storage for Azure troubleshooting
+    print("Falling back to in-memory database", file=sys.stderr)
+    from tinydb.storages import MemoryStorage
+    db = TinyDB(storage=MemoryStorage)
+    
+    users_table = db.table('users')
+    connection_requests_table = db.table('connection_requests')
+    secure_sessions_table = db.table('secure_sessions')
+    messages_table = db.table('messages')
+    audit_logs_table = db.table('audit_logs')
+    
+    UserQuery = Query()
+    ConnectionRequestQuery = Query()
+    SecureSessionQuery = Query()
+    MessageQuery = Query()
+    AuditLogQuery = Query()
 
 # ========== DATABASE FUNCTIONS ==========
 
