@@ -1,40 +1,62 @@
-name: Build OQS for Azure
+name: Deploy to Azure
 
-on: push
+on:
+  push:
+    branches: [main]
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    
     steps:
     - uses: actions/checkout@v3
     
-    - name: Setup Python
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
     
-    - name: Build liboqs
+    - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake gcc g++ libssl-dev
-        git clone https://github.com/open-quantum-safe/liboqs.git
-        cd liboqs && mkdir build && cd build
-        cmake -DBUILD_SHARED_LIBS=ON ..
-        make -j$(nproc)
-        sudo make install
+        sudo apt-get install -y cmake gcc g++ libssl-dev ninja-build
+    
+    - name: Build and install liboqs
+      run: |
+        git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
+        cd liboqs
+        mkdir build && cd build
+        cmake -GNinja -DBUILD_SHARED_LIBS=ON ..
+        ninja
+        sudo ninja install
         sudo ldconfig
     
-    - name: Build Python package
+    - name: Install Python dependencies
       run: |
-        pip install liboqs
+        python -m pip install --upgrade pip
+        pip install cython numpy
+        git clone --depth 1 https://github.com/open-quantum-safe/liboqs-python.git
+        cd liboqs-python
+        python setup.py install
+        cd ..
         pip install -r requirements.txt
-        
-    - name: Create deployment package
+    
+    - name: Test OQS installation
       run: |
-        tar -czf deployment.tar.gz *
-        
-    - name: Deploy to Azure
-      uses: azure/webapps-deploy@v2
-      with:
-        app-name: qsm-backend
-        package: deployment.tar.gz
+        python -c "import oqs; print('OQS Version:', oqs.oqs_version())"
+    
+    - name: Run tests
+      run: |
+        python -c "from service_quantum import test_quantum_crypto; test_quantum_crypto()"
+    
+    # Docker build (optional - since Azure Web App can run Python directly)
+    - name: Build Docker image
+      run: |
+        docker build -t qms-quantum:latest .
+    
+    # Deploy to Azure Web App (if you have it configured)
+    # - name: Deploy to Azure Web App
+    #   uses: azure/webapps-deploy@v2
+    #   with:
+    #     app-name: your-app-name
+    #     publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}

@@ -1,39 +1,10 @@
-# Minimal Production Requirements for Quantum Messaging System
-# Core Framework
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-gunicorn==21.2.0
-
-# Authentication & Security
-bcrypt==4.2.0
-pyjwt==2.9.0
-passlib==1.7.4
-python-jose[cryptography]==3.3.0
-
-# Data Validation & Serialization
-pydantic[email]==2.9.2
-email-validator==2.2.0
-python-multipart==0.0.9
-
-# Cryptography (for quantum crypto implementation)
-cryptography==42.0.5
-pycryptodome==3.20.0
-
-# WebSocket & Real-time
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic[email]
+bcrypt==4.1.2
+PyJWT==2.8.0
+python-multipart==0.0.6
 websockets==12.0
-aiofiles==23.2.1
-
-# HTTP Clients
-httpx==0.27.0
-
-# Environment & Configuration
-python-dotenv==1.0.0
-
-# Date & Time Utilities
-python-dateutil==2.8.2
-
-# Rate Limiting & Security
-slowapi==0.1.9
-
-# Session Management
-itsdangerous==2.1.2
+cryptography==42.0.2
+# Note: liboqs-python is installed from source in workflow

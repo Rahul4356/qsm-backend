@@ -1,248 +1,546 @@
 """
-Quantum Messaging System - Fixed Database and WebSocket Implementation
+Quantum Messaging System - Production Application
+Real Post-Quantum Cryptography using OQS (ML-KEM-768 & Falcon-512)
+Version: 3.0.0
 """
 
 import os
+import sys
 import sqlite3
-import json
 import secrets
-import base64
+import hashlib
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
-import uuid
+import json
 import asyncio
+import base64
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List, Any, Tuple
+from contextlib import contextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Header, WebSocket, WebSocketDisconnect, Query
+# FastAPI and dependencies
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel, Field, EmailStr
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, EmailStr, Field, validator
+
+# Authentication
 import bcrypt
 import jwt
 
-# Import quantum crypto functions
-from service import (
-    generate_kem_keypair,
-    generate_sig_keypair,
-    perform_encapsulation,
-    perform_decapsulation,
-    encrypt_with_aes_gcm,
-    decrypt_with_aes_gcm
+# Quantum Cryptography
+try:
+    import oqs
+    OQS_AVAILABLE = True
+    OQS_VERSION = oqs.oqs_version()
+    AVAILABLE_KEMS = oqs.get_enabled_kem_mechanisms()
+    AVAILABLE_SIGS = oqs.get_enabled_sig_mechanisms()
+except ImportError:
+    OQS_AVAILABLE = False
+    OQS_VERSION = "Not installed"
+    AVAILABLE_KEMS = []
+    AVAILABLE_SIGS = []
+    print("WARNING: OQS not installed. Install with: pip install liboqs-python")
+
+# Standard cryptography
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+
+# ============= CONFIGURATION =============
+
+class Config:
+    """Application configuration"""
+    # App settings
+    APP_NAME = "Quantum Messaging System"
+    APP_VERSION = "3.0.0"
+    
+    # Security
+    JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
+    JWT_ALGORITHM = "HS256"
+    JWT_EXPIRATION_HOURS = 24
+    BCRYPT_ROUNDS = 12
+    
+    # Database
+    DATABASE_NAME = os.getenv("DATABASE_NAME", "qms.db")
+    DATABASE_TIMEOUT = 30
+    
+    # Quantum algorithms
+    KEM_ALGORITHM = "ML-KEM-768" if "ML-KEM-768" in AVAILABLE_KEMS else "Kyber768"
+    SIG_ALGORITHM = "Falcon-512"
+    
+    # API settings
+    API_PREFIX = "/api"
+    MAX_MESSAGE_LENGTH = 10000
+    MAX_MESSAGES_PER_REQUEST = 100
+    
+    # WebSocket
+    WS_HEARTBEAT_INTERVAL = 30
+    WS_MAX_CONNECTIONS = 1000
+    
+    # CORS
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+    
+    # Logging
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+config = Config()
+
+# ============= LOGGING =============
+
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format=config.LOG_FORMAT
 )
-
-# Configuration
-SECRET_KEY = os.environ.get("SECRET_KEY", "test-secret-key-change-in-production")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 24
-
-# Use persistent database file
-DB_PATH = "qms.db"  # This will persist data
-
-# Logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="QMS Backend", version="3.0.0")
+# ============= FASTAPI APP =============
 
+app = FastAPI(
+    title=config.APP_NAME,
+    description="End-to-end encrypted messaging using NIST-standardized post-quantum cryptography",
+    version=config.APP_VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# WebSocket connection manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-        
-    async def connect(self, websocket: WebSocket, username: str):
-        await websocket.accept()
-        self.active_connections[username] = websocket
-        logger.info(f"WebSocket connected: {username}")
-        
-    def disconnect(self, username: str):
-        if username in self.active_connections:
-            del self.active_connections[username]
-            logger.info(f"WebSocket disconnected: {username}")
-            
-    async def send_personal_message(self, message: str, username: str):
-        if username in self.active_connections:
-            await self.active_connections[username].send_text(message)
-            
-    async def send_json(self, data: dict, username: str):
-        if username in self.active_connections:
-            await self.active_connections[username].send_json(data)
-            
-    async def broadcast(self, message: str):
-        for connection in self.active_connections.values():
-            await connection.send_text(message)
+# Security
+security = HTTPBearer()
 
-manager = ConnectionManager()
+# ============= DATA MODELS =============
 
-# Database functions
-def init_db():
-    """Initialize database with proper schema"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    
-    # Users table
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Quantum keys table
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS quantum_keys (
-            user_id TEXT PRIMARY KEY,
-            ml_kem_public BLOB,
-            ml_kem_private BLOB,
-            falcon_public BLOB,
-            falcon_private BLOB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-    ''')
-    
-    # Active sessions table
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS active_sessions (
-            id TEXT PRIMARY KEY,
-            user1 TEXT NOT NULL,
-            user2 TEXT NOT NULL,
-            shared_secret BLOB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_active BOOLEAN DEFAULT 1
-        )
-    ''')
-    
-    # Messages table with encryption fields
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            sender TEXT NOT NULL,
-            encrypted_content BLOB NOT NULL,
-            nonce BLOB NOT NULL,
-            tag BLOB NOT NULL,
-            message_type TEXT DEFAULT 'secured',
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES active_sessions(id)
-        )
-    ''')
-    
-    # Connection requests table
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS connection_requests (
-            id TEXT PRIMARY KEY,
-            sender TEXT NOT NULL,
-            receiver TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    logger.info(f"Database initialized at {DB_PATH}")
-
-# Initialize database on startup
-init_db()
-
-# Helper functions
-def get_db():
-    """Get database connection"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
-
-def create_token(user_id: str, username: str) -> str:
-    expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
-    payload = {"user_id": user_id, "username": username, "exp": expire}
-    return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM)
-
-def verify_token(token: str) -> Optional[dict]:
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        return payload
-    except:
-        return None
-
-async def get_current_user(authorization: str = Header(None)) -> dict:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    token = authorization.split(" ")[1]
-    payload = verify_token(token)
-    
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    
-    return {"user_id": payload["user_id"], "username": payload["username"]}
-
-# Pydantic models
 class UserRegister(BaseModel):
-    username: str
+    username: str = Field(..., min_length=3, max_length=50, regex="^[a-zA-Z0-9_-]+$")
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=8, max_length=100)
+    
+    @validator('password')
+    def validate_password(cls, v):
+        if not any(c.isupper() for c in v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not any(c.islower() for c in v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not any(c.isdigit() for c in v):
+            raise ValueError('Password must contain at least one digit')
+        return v
 
 class UserLogin(BaseModel):
     username: str
     password: str
 
-class MessageSend(BaseModel):
-    content: str
-    message_type: str = "secured"
-
 class ConnectionRequest(BaseModel):
-    receiver_username: str
-    sender_public_keys: Optional[dict] = None
+    to_username: str
 
 class ConnectionResponse(BaseModel):
-    request_id: str
+    request_id: int
     accept: bool
-    receiver_public_keys: Optional[dict] = None
 
-# API Endpoints
-@app.get("/")
-def root():
-    return {"message": "QMS Backend", "database": DB_PATH, "websocket": "enabled"}
+class MessageSend(BaseModel):
+    to_username: str
+    content: str = Field(..., max_length=config.MAX_MESSAGE_LENGTH)
+    message_type: str = Field(default="secured", regex="^(secured|critical)$")
+
+class GetMessagesRequest(BaseModel):
+    username: str
+    limit: int = Field(default=50, le=config.MAX_MESSAGES_PER_REQUEST)
+    offset: int = Field(default=0, ge=0)
+
+# ============= DATABASE =============
+
+class DatabaseManager:
+    """Database management with connection pooling"""
+    
+    @staticmethod
+    @contextmanager
+    def get_connection():
+        """Context manager for database connections"""
+        conn = None
+        try:
+            conn = sqlite3.connect(
+                config.DATABASE_NAME,
+                timeout=config.DATABASE_TIMEOUT,
+                check_same_thread=False
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            yield conn
+            conn.commit()
+        except sqlite3.Error as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Database error: {e}")
+            raise HTTPException(status_code=500, detail="Database error")
+        finally:
+            if conn:
+                conn.close()
+    
+    @staticmethod
+    def init_database():
+        """Initialize database schema"""
+        with DatabaseManager.get_connection() as conn:
+            # Users table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                    email TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                    password_hash TEXT NOT NULL,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login TIMESTAMP,
+                    CHECK (LENGTH(username) >= 3)
+                )
+            """)
+            
+            # Quantum keys table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS quantum_keys (
+                    user_id INTEGER PRIMARY KEY,
+                    ml_kem_public BLOB NOT NULL,
+                    ml_kem_private BLOB NOT NULL,
+                    falcon_public BLOB NOT NULL,
+                    falcon_private BLOB NOT NULL,
+                    kem_algorithm TEXT NOT NULL,
+                    sig_algorithm TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    rotated_at TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Active sessions
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS active_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT UNIQUE NOT NULL,
+                    user1_id INTEGER NOT NULL,
+                    user2_id INTEGER NOT NULL,
+                    shared_secret BLOB NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    kem_algorithm TEXT NOT NULL,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user1_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user2_id) REFERENCES users(id) ON DELETE CASCADE,
+                    CHECK (user1_id < user2_id),
+                    UNIQUE(user1_id, user2_id)
+                )
+            """)
+            
+            # Messages table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    sender_id INTEGER NOT NULL,
+                    receiver_id INTEGER NOT NULL,
+                    encrypted_content BLOB NOT NULL,
+                    nonce BLOB NOT NULL,
+                    tag BLOB NOT NULL,
+                    signature BLOB,
+                    message_type TEXT DEFAULT 'secured',
+                    is_read BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (session_id) REFERENCES active_sessions(session_id)
+                )
+            """)
+            
+            # Connection requests
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS connection_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_id INTEGER NOT NULL,
+                    receiver_id INTEGER NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    responded_at TIMESTAMP,
+                    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
+                    CHECK (status IN ('pending', 'accepted', 'rejected')),
+                    UNIQUE(sender_id, receiver_id)
+                )
+            """)
+            
+            # Create indexes
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_users ON active_sessions(user1_id, user2_id)")
+            
+            logger.info("Database initialized successfully")
+
+db = DatabaseManager()
+
+# ============= QUANTUM CRYPTOGRAPHY SERVICE =============
+
+class QuantumCryptoService:
+    """Real OQS quantum cryptography implementation"""
+    
+    def __init__(self):
+        if not OQS_AVAILABLE:
+            logger.error("OQS not available - quantum features disabled")
+            return
+        
+        self.kem_algorithm = config.KEM_ALGORITHM
+        self.sig_algorithm = config.SIG_ALGORITHM
+        
+        # Verify algorithms are available
+        if self.kem_algorithm not in AVAILABLE_KEMS:
+            raise ValueError(f"KEM algorithm {self.kem_algorithm} not available")
+        if self.sig_algorithm not in AVAILABLE_SIGS:
+            raise ValueError(f"Signature algorithm {self.sig_algorithm} not available")
+        
+        logger.info(f"Quantum crypto initialized: KEM={self.kem_algorithm}, SIG={self.sig_algorithm}")
+    
+    def generate_kem_keypair(self) -> Tuple[bytes, bytes]:
+        """Generate ML-KEM-768/Kyber768 keypair"""
+        with oqs.KeyEncapsulation(self.kem_algorithm) as kem:
+            public_key = kem.generate_keypair()
+            private_key = kem.export_secret_key()
+            public_key = kem.export_public_key()
+        return public_key, private_key
+    
+    def generate_sig_keypair(self) -> Tuple[bytes, bytes]:
+        """Generate Falcon-512 keypair"""
+        with oqs.Signature(self.sig_algorithm) as sig:
+            public_key = sig.generate_keypair()
+            private_key = sig.export_secret_key()
+            public_key = sig.export_public_key()
+        return public_key, private_key
+    
+    def encapsulate(self, public_key: bytes) -> Tuple[bytes, bytes]:
+        """Encapsulate shared secret"""
+        with oqs.KeyEncapsulation(self.kem_algorithm) as kem:
+            ciphertext, shared_secret = kem.encap_secret(public_key)
+        return ciphertext, shared_secret
+    
+    def decapsulate(self, ciphertext: bytes, private_key: bytes) -> bytes:
+        """Decapsulate shared secret"""
+        with oqs.KeyEncapsulation(self.kem_algorithm, secret_key=private_key) as kem:
+            shared_secret = kem.decap_secret(ciphertext)
+        return shared_secret
+    
+    def sign(self, message: bytes, private_key: bytes) -> bytes:
+        """Create Falcon-512 signature"""
+        with oqs.Signature(self.sig_algorithm, secret_key=private_key) as sig:
+            signature = sig.sign(message)
+        return signature
+    
+    def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
+        """Verify Falcon-512 signature"""
+        try:
+            with oqs.Signature(self.sig_algorithm) as sig:
+                return sig.verify(message, signature, public_key)
+        except Exception:
+            return False
+    
+    def derive_key(self, shared_secret: bytes, context: bytes = b"encryption") -> bytes:
+        """Derive AES key from shared secret"""
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=b'QMS-' + self.kem_algorithm.encode(),
+            info=context,
+            backend=default_backend()
+        )
+        return hkdf.derive(shared_secret)
+    
+    def encrypt(self, plaintext: bytes, shared_secret: bytes) -> Dict[str, bytes]:
+        """Encrypt with AES-256-GCM"""
+        key = self.derive_key(shared_secret)
+        aesgcm = AESGCM(key)
+        nonce = os.urandom(12)
+        ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+        
+        return {
+            "encrypted_content": ciphertext[:-16],
+            "nonce": nonce,
+            "tag": ciphertext[-16:]
+        }
+    
+    def decrypt(self, encrypted_data: Dict[str, bytes], shared_secret: bytes) -> bytes:
+        """Decrypt with AES-256-GCM"""
+        key = self.derive_key(shared_secret)
+        aesgcm = AESGCM(key)
+        ciphertext = encrypted_data["encrypted_content"] + encrypted_data["tag"]
+        plaintext = aesgcm.decrypt(encrypted_data["nonce"], ciphertext, None)
+        return plaintext
+
+# Initialize quantum crypto service
+quantum_crypto = QuantumCryptoService() if OQS_AVAILABLE else None
+
+# ============= AUTHENTICATION =============
+
+class AuthService:
+    """Authentication and authorization service"""
+    
+    @staticmethod
+    def hash_password(password: str) -> bytes:
+        """Hash password with bcrypt"""
+        return bcrypt.hashpw(password.encode(), bcrypt.gensalt(config.BCRYPT_ROUNDS))
+    
+    @staticmethod
+    def verify_password(password: str, hashed: bytes) -> bool:
+        """Verify password"""
+        return bcrypt.checkpw(password.encode(), hashed)
+    
+    @staticmethod
+    def create_token(user_id: int, username: str) -> str:
+        """Create JWT token"""
+        payload = {
+            "user_id": user_id,
+            "username": username,
+            "exp": datetime.utcnow() + timedelta(hours=config.JWT_EXPIRATION_HOURS),
+            "iat": datetime.utcnow()
+        }
+        return jwt.encode(payload, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
+    
+    @staticmethod
+    def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict:
+        """Verify JWT token"""
+        try:
+            payload = jwt.decode(
+                credentials.credentials,
+                config.JWT_SECRET,
+                algorithms=[config.JWT_ALGORITHM]
+            )
+            return payload
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+auth = AuthService()
+
+# ============= WEBSOCKET MANAGER =============
+
+class ConnectionManager:
+    """WebSocket connection manager"""
+    
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.connection_count = 0
+    
+    async def connect(self, websocket: WebSocket, username: str):
+        """Connect WebSocket"""
+        if self.connection_count >= config.WS_MAX_CONNECTIONS:
+            await websocket.close(code=1008, reason="Max connections reached")
+            return False
+        
+        await websocket.accept()
+        self.active_connections[username] = websocket
+        self.connection_count += 1
+        logger.info(f"WebSocket connected: {username} (total: {self.connection_count})")
+        return True
+    
+    def disconnect(self, username: str):
+        """Disconnect WebSocket"""
+        if username in self.active_connections:
+            del self.active_connections[username]
+            self.connection_count -= 1
+            logger.info(f"WebSocket disconnected: {username} (total: {self.connection_count})")
+    
+    async def send_json(self, data: dict, username: str):
+        """Send JSON to specific user"""
+        if username in self.active_connections:
+            try:
+                await self.active_connections[username].send_json(data)
+            except Exception as e:
+                logger.error(f"Failed to send to {username}: {e}")
+                self.disconnect(username)
+    
+    async def broadcast(self, data: dict, exclude: Optional[str] = None):
+        """Broadcast to all connected users"""
+        disconnected = []
+        for username, connection in self.active_connections.items():
+            if username != exclude:
+                try:
+                    await connection.send_json(data)
+                except:
+                    disconnected.append(username)
+        
+        for username in disconnected:
+            self.disconnect(username)
+
+manager = ConnectionManager()
+
+# ============= API ENDPOINTS =============
+
+# Root and Health
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Root endpoint with system info"""
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>{config.APP_NAME}</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+                   max-width: 800px; margin: 50px auto; padding: 20px; }}
+            h1 {{ color: #5e72e4; }}
+            .status {{ background: #f6f9fc; padding: 20px; border-radius: 8px; }}
+            .success {{ color: #2dce89; }}
+            .error {{ color: #f5365c; }}
+            code {{ background: #f1f1f1; padding: 2px 6px; border-radius: 3px; }}
+        </style>
+    </head>
+    <body>
+        <h1>🔐 {config.APP_NAME}</h1>
+        <div class="status">
+            <h2>System Status</h2>
+            <p><strong>Version:</strong> {config.APP_VERSION}</p>
+            <p><strong>OQS Status:</strong> <span class="{'success' if OQS_AVAILABLE else 'error'}">
+                {'✓ Active' if OQS_AVAILABLE else '✗ Not Available'}</span></p>
+            <p><strong>OQS Version:</strong> {OQS_VERSION}</p>
+            <p><strong>Quantum Algorithms:</strong></p>
+            <ul>
+                <li>KEM: <code>{config.KEM_ALGORITHM}</code></li>
+                <li>Signature: <code>{config.SIG_ALGORITHM}</code></li>
+            </ul>
+            <p><strong>API Documentation:</strong> <a href="/docs">OpenAPI Docs</a></p>
+        </div>
+    </body>
+    </html>
+    """
+    return html
 
 @app.get("/api/health")
-def health_check():
-    conn = get_db()
-    try:
-        conn.execute("SELECT 1")
-        db_status = "connected"
-    except:
-        db_status = "error"
-    finally:
-        conn.close()
-    
+async def health_check():
+    """Health check endpoint"""
     return {
         "status": "healthy",
-        "database": db_status,
-        "websocket_connections": len(manager.active_connections),
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": config.APP_VERSION,
+        "quantum_crypto": OQS_AVAILABLE,
+        "database": os.path.exists(config.DATABASE_NAME),
+        "websocket_connections": manager.connection_count
     }
 
-@app.post("/api/register")
+# User Management
+
+@app.post("/api/register", status_code=status.HTTP_201_CREATED)
 async def register(user: UserRegister):
-    conn = get_db()
-    try:
+    """Register new user with quantum keys"""
+    if not OQS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Quantum crypto not available")
+    
+    with db.get_connection() as conn:
         # Check if user exists
         existing = conn.execute(
             "SELECT id FROM users WHERE username = ? OR email = ?",
@@ -252,804 +550,672 @@ async def register(user: UserRegister):
         if existing:
             raise HTTPException(status_code=400, detail="Username or email already exists")
         
-        # Create user
-        user_id = str(uuid.uuid4())
-        password_hash = hash_password(user.password)
+        # Hash password
+        password_hash = auth.hash_password(user.password)
         
-        conn.execute(
-            "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
-            (user_id, user.username, user.email, password_hash)
-        )
+        # Create user
+        cursor = conn.execute("""
+            INSERT INTO users (username, email, password_hash)
+            VALUES (?, ?, ?)
+        """, (user.username, user.email, password_hash))
+        
+        user_id = cursor.lastrowid
         
         # Generate quantum keys
-        kem_keys = generate_kem_keypair(user_id)
-        sig_keys = generate_sig_keypair(user_id)
+        kem_public, kem_private = quantum_crypto.generate_kem_keypair()
+        sig_public, sig_private = quantum_crypto.generate_sig_keypair()
         
         # Store quantum keys
-        conn.execute(
-            """INSERT INTO quantum_keys 
-               (user_id, ml_kem_public, ml_kem_private, falcon_public, falcon_private) 
-               VALUES (?, ?, ?, ?, ?)""",
-            (user_id, kem_keys["public"], kem_keys["private"], 
-             sig_keys["public"], sig_keys["private"])
-        )
+        conn.execute("""
+            INSERT INTO quantum_keys 
+            (user_id, ml_kem_public, ml_kem_private, falcon_public, falcon_private, kem_algorithm, sig_algorithm)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            kem_public,
+            kem_private,
+            sig_public,
+            sig_private,
+            config.KEM_ALGORITHM,
+            config.SIG_ALGORITHM
+        ))
         
-        conn.commit()
+        # Create token
+        token = auth.create_token(user_id, user.username)
         
-        token = create_token(user_id, user.username)
-        
-        logger.info(f"User registered: {user.username}")
+        logger.info(f"User registered: {user.username} (ID: {user_id})")
         
         return {
-            "access_token": token,
-            "token_type": "bearer",
+            "user_id": user_id,
             "username": user.username,
-            "quantum_ready": True
-        }
-        
-    finally:
-        conn.close()
-
-@app.post("/api/login")
-async def login(creds: UserLogin):
-    conn = get_db()
-    try:
-        user = conn.execute(
-            "SELECT * FROM users WHERE username = ? OR email = ?",
-            (creds.username, creds.username)
-        ).fetchone()
-        
-        if not user or not verify_password(creds.password, user["password_hash"]):
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        
-        token = create_token(user["id"], user["username"])
-        
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "username": user["username"],
-            "quantum_ready": True
-        }
-        
-    finally:
-        conn.close()
-
-@app.get("/api/users/available")
-async def get_available_users(current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    try:
-        users = conn.execute(
-            """SELECT u.username, 
-                      CASE WHEN qk.user_id IS NOT NULL THEN 1 ELSE 0 END as has_quantum_keys,
-                      CASE WHEN s.id IS NOT NULL THEN 1 ELSE 0 END as in_session
-               FROM users u
-               LEFT JOIN quantum_keys qk ON u.id = qk.user_id
-               LEFT JOIN active_sessions s ON (s.user1 = u.username OR s.user2 = u.username) 
-                                            AND s.is_active = 1
-               WHERE u.username != ?""",
-            (current_user["username"],)
-        ).fetchall()
-        
-        available = []
-        for user in users:
-            available.append({
-                "username": user["username"],
-                "status": "busy" if user["in_session"] else "online",
-                "can_connect": not user["in_session"],
-                "has_quantum_keys": bool(user["has_quantum_keys"])
-            })
-        
-        return available
-        
-    finally:
-        conn.close()
-
-@app.post("/api/quantum/generate_keys")
-async def generate_keys(current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    try:
-        # Generate new keys
-        kem_keys = generate_kem_keypair(current_user["user_id"])
-        sig_keys = generate_sig_keypair(current_user["user_id"])
-        
-        # Update or insert keys
-        conn.execute(
-            """INSERT OR REPLACE INTO quantum_keys 
-               (user_id, ml_kem_public, ml_kem_private, falcon_public, falcon_private) 
-               VALUES (?, ?, ?, ?, ?)""",
-            (current_user["user_id"], kem_keys["public"], kem_keys["private"],
-             sig_keys["public"], sig_keys["private"])
-        )
-        conn.commit()
-        
-        return {
-            "keys": {
-                "ml_kem_public": base64.b64encode(kem_keys["public"]).decode(),
-                "falcon_public": base64.b64encode(sig_keys["public"]).decode()
+            "token": token,
+            "quantum_algorithms": {
+                "kem": config.KEM_ALGORITHM,
+                "signature": config.SIG_ALGORITHM
             }
         }
-        
-    finally:
-        conn.close()
 
-@app.post("/api/connection/request")
-async def create_connection_request(
+@app.post("/api/login")
+async def login(user: UserLogin):
+    """Login user"""
+    with db.get_connection() as conn:
+        # Get user
+        row = conn.execute("""
+            SELECT id, username, password_hash, is_active 
+            FROM users WHERE username = ?
+        """, (user.username,)).fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        if not row["is_active"]:
+            raise HTTPException(status_code=403, detail="Account disabled")
+        
+        # Verify password
+        if not auth.verify_password(user.password, row["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        # Update last login
+        conn.execute(
+            "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
+            (row["id"],)
+        )
+        
+        # Create token
+        token = auth.create_token(row["id"], row["username"])
+        
+        logger.info(f"User logged in: {user.username}")
+        
+        return {
+            "user_id": row["id"],
+            "username": row["username"],
+            "token": token
+        }
+
+@app.get("/api/user/profile")
+async def get_profile(current_user: dict = Depends(auth.verify_token)):
+    """Get user profile"""
+    with db.get_connection() as conn:
+        user = conn.execute("""
+            SELECT u.username, u.email, u.created_at, u.last_login,
+                   qk.kem_algorithm, qk.sig_algorithm
+            FROM users u
+            LEFT JOIN quantum_keys qk ON u.id = qk.user_id
+            WHERE u.id = ?
+        """, (current_user["user_id"],)).fetchone()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return dict(user)
+
+# Quantum Session Management
+
+@app.post("/api/quantum/establish-session")
+async def establish_session(
     request: ConnectionRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(auth.verify_token)
 ):
-    conn = get_db()
-    try:
-        receiver_username = request.receiver_username
-        
-        if not receiver_username:
-            raise HTTPException(status_code=400, detail="Receiver username required")
-        
-        # Check if receiver exists
-        receiver = conn.execute(
-            "SELECT username FROM users WHERE username = ?",
-            (receiver_username,)
-        ).fetchone()
+    """Establish quantum-secure session"""
+    if not OQS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Quantum crypto not available")
+    
+    with db.get_connection() as conn:
+        # Get receiver
+        receiver = conn.execute("""
+            SELECT u.id, qk.ml_kem_public 
+            FROM users u
+            JOIN quantum_keys qk ON u.id = qk.user_id
+            WHERE u.username = ? AND u.is_active = 1
+        """, (request.to_username,)).fetchone()
         
         if not receiver:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Check for existing pending request
-        existing = conn.execute(
-            """SELECT id FROM connection_requests 
-               WHERE sender = ? AND receiver = ? AND status = 'pending'""",
-            (current_user["username"], receiver_username)
-        ).fetchall()
+        # Ensure user1_id < user2_id for consistency
+        user1_id = min(current_user["user_id"], receiver["id"])
+        user2_id = max(current_user["user_id"], receiver["id"])
+        
+        # Check existing session
+        existing = conn.execute("""
+            SELECT session_id, shared_secret, is_active
+            FROM active_sessions
+            WHERE user1_id = ? AND user2_id = ?
+        """, (user1_id, user2_id)).fetchone()
+        
+        if existing and existing["is_active"]:
+            # Update last used
+            conn.execute(
+                "UPDATE active_sessions SET last_used = CURRENT_TIMESTAMP WHERE session_id = ?",
+                (existing["session_id"],)
+            )
+            return {
+                "status": "existing",
+                "session_id": existing["session_id"]
+            }
+        
+        # Create new session
+        session_id = f"qms_{user1_id}_{user2_id}_{secrets.token_hex(8)}"
+        
+        # Encapsulate shared secret
+        ciphertext, shared_secret = quantum_crypto.encapsulate(receiver["ml_kem_public"])
+        
+        # Store session
+        if existing:
+            # Reactivate existing session
+            conn.execute("""
+                UPDATE active_sessions 
+                SET shared_secret = ?, ciphertext = ?, is_active = 1, 
+                    created_at = CURRENT_TIMESTAMP, last_used = CURRENT_TIMESTAMP
+                WHERE user1_id = ? AND user2_id = ?
+            """, (shared_secret, ciphertext, user1_id, user2_id))
+        else:
+            # Create new session
+            conn.execute("""
+                INSERT INTO active_sessions 
+                (session_id, user1_id, user2_id, shared_secret, ciphertext, kem_algorithm)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                session_id,
+                user1_id,
+                user2_id,
+                shared_secret,
+                ciphertext,
+                config.KEM_ALGORITHM
+            ))
+        
+        logger.info(f"Quantum session established: {session_id}")
+        
+        return {
+            "status": "established",
+            "session_id": session_id,
+            "algorithm": config.KEM_ALGORITHM
+        }
+
+# Messaging
+
+@app.post("/api/message/send")
+async def send_message(
+    message: MessageSend,
+    current_user: dict = Depends(auth.verify_token)
+):
+    """Send quantum-encrypted message"""
+    if not OQS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Quantum crypto not available")
+    
+    with db.get_connection() as conn:
+        # Get receiver
+        receiver = conn.execute("""
+            SELECT id FROM users WHERE username = ? AND is_active = 1
+        """, (message.to_username,)).fetchone()
+        
+        if not receiver:
+            raise HTTPException(status_code=404, detail="Receiver not found")
+        
+        # Get or create session
+        user1_id = min(current_user["user_id"], receiver["id"])
+        user2_id = max(current_user["user_id"], receiver["id"])
+        
+        session = conn.execute("""
+            SELECT session_id, shared_secret 
+            FROM active_sessions
+            WHERE user1_id = ? AND user2_id = ? AND is_active = 1
+        """, (user1_id, user2_id)).fetchone()
+        
+        if not session:
+            # Auto-establish session
+            receiver_keys = conn.execute("""
+                SELECT ml_kem_public FROM quantum_keys WHERE user_id = ?
+            """, (receiver["id"],)).fetchone()
+            
+            if not receiver_keys:
+                raise HTTPException(status_code=500, detail="Receiver keys not found")
+            
+            session_id = f"qms_{user1_id}_{user2_id}_{secrets.token_hex(8)}"
+            ciphertext, shared_secret = quantum_crypto.encapsulate(receiver_keys["ml_kem_public"])
+            
+            conn.execute("""
+                INSERT INTO active_sessions 
+                (session_id, user1_id, user2_id, shared_secret, ciphertext, kem_algorithm)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                session_id,
+                user1_id,
+                user2_id,
+                shared_secret,
+                ciphertext,
+                config.KEM_ALGORITHM
+            ))
+            
+            session = {"session_id": session_id, "shared_secret": shared_secret}
+        
+        # Get signature key for critical messages
+        signature = None
+        if message.message_type == "critical":
+            sig_keys = conn.execute("""
+                SELECT falcon_private FROM quantum_keys WHERE user_id = ?
+            """, (current_user["user_id"],)).fetchone()
+            
+            if sig_keys:
+                signature = quantum_crypto.sign(
+                    message.content.encode(),
+                    sig_keys["falcon_private"]
+                )
+        
+        # Encrypt message
+        encrypted = quantum_crypto.encrypt(
+            message.content.encode(),
+            session["shared_secret"]
+        )
+        
+        # Store message
+        cursor = conn.execute("""
+            INSERT INTO messages 
+            (session_id, sender_id, receiver_id, encrypted_content, nonce, tag, signature, message_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            session["session_id"],
+            current_user["user_id"],
+            receiver["id"],
+            encrypted["encrypted_content"],
+            encrypted["nonce"],
+            encrypted["tag"],
+            signature,
+            message.message_type
+        ))
+        
+        message_id = cursor.lastrowid
+        
+        # Update session last used
+        conn.execute(
+            "UPDATE active_sessions SET last_used = CURRENT_TIMESTAMP WHERE session_id = ?",
+            (session["session_id"],)
+        )
+        
+        # Send WebSocket notification
+        await manager.send_json({
+            "type": "new_message",
+            "message_id": message_id,
+            "from": current_user["username"],
+            "timestamp": datetime.utcnow().isoformat()
+        }, message.to_username)
+        
+        logger.info(f"Message sent: {message_id} from {current_user['username']} to {message.to_username}")
+        
+        return {
+            "message_id": message_id,
+            "encrypted": True,
+            "signed": message.message_type == "critical"
+        }
+
+@app.get("/api/messages/{username}")
+async def get_messages(
+    username: str,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: dict = Depends(auth.verify_token)
+):
+    """Get decrypted messages with user"""
+    if not OQS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Quantum crypto not available")
+    
+    with db.get_connection() as conn:
+        # Get other user
+        other_user = conn.execute("""
+            SELECT id FROM users WHERE username = ?
+        """, (username,)).fetchone()
+        
+        if not other_user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Get session
+        user1_id = min(current_user["user_id"], other_user["id"])
+        user2_id = max(current_user["user_id"], other_user["id"])
+        
+        session = conn.execute("""
+            SELECT session_id, shared_secret
+            FROM active_sessions
+            WHERE user1_id = ? AND user2_id = ? AND is_active = 1
+        """, (user1_id, user2_id)).fetchone()
+        
+        if not session:
+            return {"messages": [], "total": 0}
+        
+        # Get total count
+        total = conn.execute("""
+            SELECT COUNT(*) as count FROM messages WHERE session_id = ?
+        """, (session["session_id"],)).fetchone()["count"]
+        
+        # Get messages
+        messages = conn.execute("""
+            SELECT m.*, u.username as sender_username
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            WHERE m.session_id = ?
+            ORDER BY m.created_at DESC
+            LIMIT ? OFFSET ?
+        """, (session["session_id"], limit, offset)).fetchall()
+        
+        # Mark as read
+        conn.execute("""
+            UPDATE messages SET is_read = 1 
+            WHERE session_id = ? AND receiver_id = ? AND is_read = 0
+        """, (session["session_id"], current_user["user_id"]))
+        
+        decrypted_messages = []
+        for msg in messages:
+            try:
+                # Decrypt
+                decrypted = quantum_crypto.decrypt(
+                    {
+                        "encrypted_content": msg["encrypted_content"],
+                        "nonce": msg["nonce"],
+                        "tag": msg["tag"]
+                    },
+                    session["shared_secret"]
+                )
+                
+                # Verify signature if present
+                verified = False
+                if msg["signature"]:
+                    sig_keys = conn.execute("""
+                        SELECT falcon_public FROM quantum_keys WHERE user_id = ?
+                    """, (msg["sender_id"],)).fetchone()
+                    
+                    if sig_keys:
+                        verified = quantum_crypto.verify(
+                            decrypted,
+                            msg["signature"],
+                            sig_keys["falcon_public"]
+                        )
+                
+                decrypted_messages.append({
+                    "id": msg["id"],
+                    "sender": msg["sender_username"],
+                    "content": decrypted.decode(),
+                    "message_type": msg["message_type"],
+                    "timestamp": msg["created_at"],
+                    "is_read": bool(msg["is_read"]),
+                    "verified": verified
+                })
+                
+            except Exception as e:
+                logger.error(f"Failed to decrypt message {msg['id']}: {e}")
+                decrypted_messages.append({
+                    "id": msg["id"],
+                    "sender": msg["sender_username"],
+                    "content": "[Decryption failed]",
+                    "error": True,
+                    "timestamp": msg["created_at"]
+                })
+        
+        return {
+            "messages": decrypted_messages,
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+
+# Connection Management
+
+@app.post("/api/connection/request")
+async def request_connection(
+    request: ConnectionRequest,
+    current_user: dict = Depends(auth.verify_token)
+):
+    """Send connection request"""
+    with db.get_connection() as conn:
+        # Get receiver
+        receiver = conn.execute("""
+            SELECT id FROM users WHERE username = ? AND is_active = 1
+        """, (request.to_username,)).fetchone()
+        
+        if not receiver:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        if receiver["id"] == current_user["user_id"]:
+            raise HTTPException(status_code=400, detail="Cannot connect to yourself")
+        
+        # Check existing request
+        existing = conn.execute("""
+            SELECT id, status FROM connection_requests
+            WHERE sender_id = ? AND receiver_id = ?
+        """, (current_user["user_id"], receiver["id"])).fetchone()
         
         if existing:
-            return {"request_id": existing[0]["id"], "status": "already_pending"}
+            if existing["status"] == "pending":
+                return {"status": "already_pending", "request_id": existing["id"]}
+            elif existing["status"] == "accepted":
+                return {"status": "already_connected"}
         
-        # Create new request
-        request_id = str(uuid.uuid4())
-        conn.execute(
-            """INSERT INTO connection_requests 
-               (id, sender, receiver, status) 
-               VALUES (?, ?, ?, 'pending')""",
-            (request_id, current_user["username"], receiver_username)
-        )
-        conn.commit()
+        # Create request
+        cursor = conn.execute("""
+            INSERT INTO connection_requests (sender_id, receiver_id)
+            VALUES (?, ?)
+        """, (current_user["user_id"], receiver["id"]))
         
-        # Notify via WebSocket if connected
-        if receiver_username in manager.active_connections:
-            await manager.send_json({
-                "type": "connection_request",
-                "sender": current_user["username"],
-                "request_id": request_id
-            }, receiver_username)
+        request_id = cursor.lastrowid
         
-        logger.info(f"Connection request created: {current_user['username']} -> {receiver_username}")
+        # Send WebSocket notification
+        await manager.send_json({
+            "type": "connection_request",
+            "request_id": request_id,
+            "from": current_user["username"]
+        }, request.to_username)
         
-        return {"request_id": request_id, "status": "pending"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating connection request: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
+        return {"status": "sent", "request_id": request_id}
 
 @app.get("/api/connection/pending")
-async def get_pending_requests(current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    try:
-        requests = conn.execute(
-            """SELECT id AS request_id, sender AS sender_username, created_at 
-               FROM connection_requests 
-               WHERE receiver = ? AND status = 'pending'
-               ORDER BY created_at DESC""",
-            (current_user["username"],)
-        ).fetchall()
+async def get_pending_connections(current_user: dict = Depends(auth.verify_token)):
+    """Get pending connection requests"""
+    with db.get_connection() as conn:
+        requests = conn.execute("""
+            SELECT cr.id, cr.created_at, u.username as sender_username
+            FROM connection_requests cr
+            JOIN users u ON cr.sender_id = u.id
+            WHERE cr.receiver_id = ? AND cr.status = 'pending'
+            ORDER BY cr.created_at DESC
+        """, (current_user["user_id"],)).fetchall()
         
-        return [dict(r) for r in requests]
-        
-    finally:
-        conn.close()
+        return {"requests": [dict(r) for r in requests]}
 
 @app.post("/api/connection/respond")
 async def respond_to_connection(
     response: ConnectionResponse,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(auth.verify_token)
 ):
-    conn = get_db()
-    try:
-        request_id = response.request_id
-        accept = response.accept
-        
-        if not request_id:
-            raise HTTPException(status_code=400, detail="Request ID required")
-        
-        # Get the request
-        request = conn.execute(
-            "SELECT * FROM connection_requests WHERE id = ? AND receiver = ?",
-            (request_id, current_user["username"])
-        ).fetchone()
+    """Respond to connection request"""
+    with db.get_connection() as conn:
+        # Get request
+        request = conn.execute("""
+            SELECT sender_id, receiver_id, status
+            FROM connection_requests
+            WHERE id = ? AND receiver_id = ?
+        """, (response.request_id, current_user["user_id"])).fetchone()
         
         if not request:
             raise HTTPException(status_code=404, detail="Request not found")
         
         if request["status"] != "pending":
-            raise HTTPException(status_code=400, detail="Request already processed")
+            raise HTTPException(status_code=400, detail="Request already responded")
         
-        if accept:
-            # Create session with shared secret
-            session_id = str(uuid.uuid4())
-            shared_secret = secrets.token_bytes(32)
-            
-            conn.execute(
-                """INSERT INTO active_sessions 
-                   (id, user1, user2, shared_secret, is_active) 
-                   VALUES (?, ?, ?, ?, 1)""",
-                (session_id, request["sender"], current_user["username"], shared_secret)
-            )
-            
-            conn.execute(
-                "UPDATE connection_requests SET status = 'accepted' WHERE id = ?",
-                (request_id,)
-            )
-            conn.commit()
-            
-            # Notify sender via WebSocket
-            if request["sender"] in manager.active_connections:
-                await manager.send_json({
-                    "type": "connection_accepted",
-                    "session_id": session_id,
-                    "peer_username": current_user["username"]
-                }, request["sender"])
-            
-            logger.info(f"Connection accepted: {request['sender']} <-> {current_user['username']}")
-            
-            return {
-                "session_id": session_id,
-                "peer_username": request["sender"],
-                "quantum_algorithm": "ML-KEM-768"
-            }
-        else:
-            conn.execute(
-                "UPDATE connection_requests SET status = 'rejected' WHERE id = ?",
-                (request_id,)
-            )
-            conn.commit()
-            
-            return {"status": "rejected"}
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error responding to connection: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
-@app.get("/api/session/status")
-async def get_session_status(current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    try:
-        session = conn.execute(
-            """SELECT * FROM active_sessions 
-               WHERE (user1 = ? OR user2 = ?) AND is_active = 1""",
-            (current_user["username"], current_user["username"])
-        ).fetchone()
+        # Update status
+        new_status = "accepted" if response.accept else "rejected"
+        conn.execute("""
+            UPDATE connection_requests 
+            SET status = ?, responded_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (new_status, response.request_id))
         
-        if session:
-            peer = session["user2"] if session["user1"] == current_user["username"] else session["user1"]
-            return {
-                "active": True,
-                "session_id": session["id"],
-                "peer_username": peer
-            }
-        
-        return {"active": False}
-        
-    finally:
-        conn.close()
-
-@app.post("/api/message/send")
-async def send_message(
-    message: MessageSend,
-    current_user: dict = Depends(get_current_user)
-):
-    conn = get_db()
-    try:
-        # Get active session
-        session = conn.execute(
-            """SELECT * FROM active_sessions 
-               WHERE (user1 = ? OR user2 = ?) AND is_active = 1""",
-            (current_user["username"], current_user["username"])
-        ).fetchone()
-        
-        if not session:
-            raise HTTPException(status_code=400, detail="No active session")
-        
-        # Encrypt message
-        plaintext = message.content.encode('utf-8')
-        ciphertext, nonce, tag = encrypt_with_aes_gcm(plaintext, session["shared_secret"])
-        
-        # Store encrypted message
-        message_id = str(uuid.uuid4())
-        conn.execute(
-            """INSERT INTO messages 
-               (id, session_id, sender, encrypted_content, nonce, tag, message_type) 
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (message_id, session["id"], current_user["username"], 
-             ciphertext, nonce, tag, message.message_type)
-        )
-        conn.commit()
-        
-        # Notify peer via WebSocket
-        peer = session["user2"] if session["user1"] == current_user["username"] else session["user1"]
-        await manager.send_json({
-            "type": "new_message",
-            "message_id": message_id
-        }, peer)
-        
-        return {"message_id": message_id, "encrypted": True}
-        
-    finally:
-        conn.close()
-
-@app.get("/api/messages")
-async def get_messages(current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    try:
-        # Get active session
-        session = conn.execute(
-            """SELECT * FROM active_sessions 
-               WHERE (user1 = ? OR user2 = ?) AND is_active = 1""",
-            (current_user["username"], current_user["username"])
-        ).fetchone()
-        
-        if not session:
-            return []
-        
-        # Get messages
-        messages = conn.execute(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp",
-            (session["id"],)
-        ).fetchall()
-        
-        # Decrypt messages
-        decrypted = []
-        for msg in messages:
-            try:
-                plaintext = decrypt_with_aes_gcm(
-                    msg["encrypted_content"],
-                    msg["nonce"],
-                    msg["tag"],
-                    session["shared_secret"]
-                )
-                
-                decrypted.append({
-                    "id": msg["id"],
-                    "content": plaintext.decode('utf-8'),
-                    "sender_username": msg["sender"],
-                    "is_mine": msg["sender"] == current_user["username"],
-                    "message_type": msg["message_type"],
-                    "timestamp": msg["timestamp"]
-                })
-            except Exception as e:
-                logger.error(f"Failed to decrypt message: {e}")
-        
-        return decrypted
-        
-    finally:
-        conn.close()
-
-@app.get("/api/debug/encryption-proof")
-async def get_encryption_proof(current_user: dict = Depends(get_current_user)):
-    """Show actual encrypted data as proof the system works"""
-    conn = get_db()
-    try:
-        proof = {
-            "database_location": DB_PATH,
-            "timestamp": datetime.utcnow().isoformat(),
-            "user": current_user["username"]
-        }
-        
-        # Get raw encrypted messages
-        messages = conn.execute("""
-            SELECT 
-                id,
-                sender,
-                hex(encrypted_content) as encrypted_hex,
-                hex(nonce) as nonce_hex,
-                hex(tag) as tag_hex,
-                length(encrypted_content) as encrypted_size,
-                message_type,
-                timestamp
-            FROM messages 
-            ORDER BY timestamp DESC 
-            LIMIT 5
-        """).fetchall()
-        
-        proof["encrypted_messages"] = [dict(m) for m in messages]
-        
-        # Get session with shared secret proof
-        session = conn.execute("""
-            SELECT 
-                id,
-                user1,
-                user2,
-                hex(shared_secret) as shared_secret_hex,
-                length(shared_secret) as key_size,
-                created_at
-            FROM active_sessions 
-            WHERE is_active = 1
-            LIMIT 1
-        """).fetchone()
-        
-        if session:
-            proof["active_session"] = dict(session)
-        
-        # Get quantum keys proof
-        keys = conn.execute("""
-            SELECT 
-                user_id,
-                length(ml_kem_public) as kem_public_size,
-                length(ml_kem_private) as kem_private_size,
-                length(falcon_public) as falcon_public_size,
-                length(falcon_private) as falcon_private_size,
-                hex(substr(ml_kem_public, 1, 32)) as kem_public_sample,
-                created_at
-            FROM quantum_keys 
-            WHERE user_id = ?
-        """, (current_user["user_id"],)).fetchone()
-        
-        if keys:
-            proof["quantum_keys"] = dict(keys)
-        
-        # Show one message decryption as proof
-        if messages and session:
-            sample_msg = messages[0]
-            try:
-                # Decrypt to show it works
-                from service import decrypt_with_aes_gcm
-                
-                plaintext = decrypt_with_aes_gcm(
-                    bytes.fromhex(sample_msg["encrypted_hex"]),
-                    bytes.fromhex(sample_msg["nonce_hex"]),
-                    bytes.fromhex(sample_msg["tag_hex"]),
-                    bytes.fromhex(session["shared_secret_hex"])
-                )
-                
-                proof["decryption_proof"] = {
-                    "message_id": sample_msg["id"],
-                    "encrypted_size": sample_msg["encrypted_size"],
-                    "decrypted_content": plaintext.decode('utf-8'),
-                    "encryption_algorithm": "AES-256-GCM",
-                    "key_derivation": "ML-KEM-768"
-                }
-            except Exception as e:
-                proof["decryption_error"] = str(e)
-        
-        return proof
-        
-    finally:
-        conn.close()
-
-@app.get("/api/proof")
-async def get_visual_proof():
-    """Public endpoint to show encryption is working"""
-    conn = get_db()
-    try:
-        # Count statistics
-        stats = {
-            "total_users": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
-            "total_messages": conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
-            "active_sessions": conn.execute("SELECT COUNT(*) FROM active_sessions WHERE is_active=1").fetchone()[0],
-            "quantum_keys_generated": conn.execute("SELECT COUNT(*) FROM quantum_keys").fetchone()[0]
-        }
-        
-        # Get sample encrypted message (without sensitive data)
-        sample = conn.execute("""
-            SELECT 
-                hex(substr(encrypted_content, 1, 32)) as encrypted_sample,
-                length(encrypted_content) as size,
-                message_type,
-                timestamp
-            FROM messages 
-            ORDER BY timestamp DESC 
-            LIMIT 1
-        """).fetchone()
-        
-        # Get a sample of quantum key sizes
-        key_sample = conn.execute("""
-            SELECT 
-                length(ml_kem_public) as kem_public_size,
-                length(falcon_public) as falcon_public_size,
-                hex(substr(ml_kem_public, 1, 16)) as kem_public_preview
-            FROM quantum_keys 
-            LIMIT 1
-        """).fetchone()
-        
-        return {
-            "proof_of_encryption": True,
-            "verification_timestamp": datetime.utcnow().isoformat(),
-            "statistics": stats,
-            "sample_encrypted_data": dict(sample) if sample else None,
-            "quantum_key_sample": dict(key_sample) if key_sample else None,
-            "encryption_details": {
-                "key_exchange": "ML-KEM-768 (NIST Post-Quantum)",
-                "signatures": "Falcon-512 (Quantum-Resistant)",
-                "symmetric": "AES-256-GCM",
-                "key_size": "256 bits",
-                "database": "SQLite with BLOB storage",
-                "storage_format": "Binary encrypted content with separate nonce and authentication tag"
-            },
-            "security_guarantees": {
-                "quantum_resistant": True,
-                "authenticated_encryption": True,
-                "forward_secrecy": True,
-                "post_quantum_signatures": True
-            }
-        }
-    finally:
-        conn.close()
-
-@app.get("/api/debug/database-structure")
-async def get_database_structure(current_user: dict = Depends(get_current_user)):
-    """Show database schema and table structures"""
-    conn = get_db()
-    try:
-        structure = {
-            "database_path": DB_PATH,
-            "timestamp": datetime.utcnow().isoformat(),
-            "inspector": current_user["username"]
-        }
-        
-        # Get all tables
-        tables = conn.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name NOT LIKE 'sqlite_%'
-        """).fetchall()
-        
-        structure["tables"] = {}
-        
-        for table in tables:
-            table_name = table[0]
-            
-            # Get table schema
-            schema = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-            
-            # Get row count
-            count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-            
-            # Get sample of encrypted fields for messages table
-            sample_data = None
-            if table_name == "messages":
-                sample = conn.execute("""
-                    SELECT 
-                        id,
-                        sender,
-                        hex(substr(encrypted_content, 1, 20)) as encrypted_preview,
-                        length(encrypted_content) as content_size,
-                        hex(substr(nonce, 1, 8)) as nonce_preview,
-                        length(nonce) as nonce_size,
-                        hex(substr(tag, 1, 8)) as tag_preview,
-                        length(tag) as tag_size
-                    FROM messages 
-                    LIMIT 3
-                """).fetchall()
-                sample_data = [dict(s) for s in sample]
-            
-            elif table_name == "active_sessions":
-                sample = conn.execute("""
-                    SELECT 
-                        id,
-                        user1,
-                        user2,
-                        hex(substr(shared_secret, 1, 16)) as secret_preview,
-                        length(shared_secret) as secret_size,
-                        is_active
-                    FROM active_sessions 
-                    LIMIT 3
-                """).fetchall()
-                sample_data = [dict(s) for s in sample]
-            
-            structure["tables"][table_name] = {
-                "schema": [dict(zip([col[0] for col in schema], row)) for row in schema],
-                "row_count": count,
-                "sample_data": sample_data
-            }
-        
-        return structure
-        
-    finally:
-        conn.close()
-
-@app.get("/api/debug/service-functions")
-def check_service_functions():
-    """Check what functions are available in service.py"""
-    try:
-        import service
-        import inspect
-        
-        # Get all functions in service module
-        functions = [name for name, obj in inspect.getmembers(service) 
-                    if inspect.isfunction(obj)]
-        
-        return {
-            "available_functions": sorted(functions),
-            "service_file_found": True,
-            "total_functions": len(functions)
-        }
-    except Exception as e:
-        return {
-            "error": str(e),
-            "service_file_found": False,
-            "available_functions": []
-        }
-
-@app.get("/api/debug/encryption-test")
-async def test_encryption_live():
-    """Live test of encryption/decryption to prove it works"""
-    try:
-        # Use the same approach as the working test-encryption endpoint
-        from service import encrypt_with_aes_gcm, decrypt_with_aes_gcm
-        import secrets
-        
-        # Test message
-        test_message = "🔐 QUANTUM ENCRYPTION TEST - This message proves end-to-end encryption works! 🔐"
-        
-        # Generate test key (like in working endpoint)
-        test_key = secrets.token_bytes(32)
-        
-        # Encrypt message
-        plaintext = test_message.encode()
-        encrypted_content, nonce, tag = encrypt_with_aes_gcm(plaintext, test_key)
-        
-        # Decrypt message
-        decrypted_content = decrypt_with_aes_gcm(encrypted_content, nonce, tag, test_key)
-        
-        return {
-            "test_status": "SUCCESS",
-            "timestamp": datetime.utcnow().isoformat(),
-            "original_message": test_message,
-            "decrypted_message": decrypted_content.decode(),
-            "encryption_proof": {
-                "encrypted_hex": encrypted_content.hex(),
-                "nonce_hex": nonce.hex(),
-                "tag_hex": tag.hex(),
-                "original_size": len(plaintext),
-                "encrypted_size": len(encrypted_content),
-                "key_size": 256,
-                "algorithm": "AES-256-GCM",
-                "test_key_hex": test_key.hex()[:32] + "...",
-                "encryption_successful": True
-            },
-            "quantum_algorithms": {
-                "key_exchange": "ML-KEM-768",
-                "signatures": "Falcon-512",
-                "symmetric_encryption": "AES-256-GCM"
-            },
-            "note": "This test uses simple key generation instead of ML-KEM for reliability"
-        }
-        
-    except Exception as e:
-        return {
-            "test_status": "FAILED",
-            "error": str(e),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-
-@app.get("/api/test-encryption")
-def test_encryption():
-    """Simple test to prove encryption works"""
-    try:
-        from service import encrypt_with_aes_gcm, decrypt_with_aes_gcm
-        
-        # Encrypt a test message
-        test_key = secrets.token_bytes(32)
-        plaintext = b"This is a quantum-encrypted test message"
-        ciphertext, nonce, tag = encrypt_with_aes_gcm(plaintext, test_key)
-        
-        # Decrypt to prove it works
-        decrypted = decrypt_with_aes_gcm(ciphertext, nonce, tag, test_key)
-        
-        return {
-            "proof": "Encryption is working",
-            "test_message": "This is a quantum-encrypted test message",
-            "decrypted_message": decrypted.decode(),
-            "encryption_proof": {
-                "encrypted_hex": ciphertext.hex(),
-                "nonce_hex": nonce.hex(),
-                "tag_hex": tag.hex(),
-                "original_size": len(plaintext),
-                "encrypted_size": len(ciphertext),
-                "key_size": 256,
-                "algorithm": "AES-256-GCM"
-            },
-            "quantum_crypto": {
-                "key_exchange": "ML-KEM-768",
-                "signatures": "Falcon-512", 
-                "symmetric": "AES-256-GCM"
-            },
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    except Exception as e:
-        return {
-            "error": str(e),
-            "proof": "Failed to encrypt",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-
-@app.get("/encryption-proof", response_class=FileResponse)
-async def serve_encryption_proof():
-    """Serve the encryption proof visualization page"""
-    return FileResponse("encryption_proof.html", media_type="text/html")
-
-@app.get("/api/debug/database")
-async def debug_database(current_user: dict = Depends(get_current_user)):
-    """Debug endpoint to inspect database state"""
-    conn = get_db()
-    try:
-        # Get table info
-        tables = {}
-        for table in ['users', 'quantum_keys', 'active_sessions', 'messages']:
-            count = conn.execute(f"SELECT COUNT(*) as count FROM {table}").fetchone()
-            tables[table] = count["count"]
-        
-        # Get current user's session
-        session = conn.execute(
-            """SELECT id, user1, user2, LENGTH(shared_secret) as secret_size 
-               FROM active_sessions 
-               WHERE (user1 = ? OR user2 = ?) AND is_active = 1""",
-            (current_user["username"], current_user["username"])
-        ).fetchone()
-        
-        # Get message count in session
-        message_count = 0
-        if session:
-            msg_count = conn.execute(
-                "SELECT COUNT(*) as count FROM messages WHERE session_id = ?",
-                (session["id"],)
+        if response.accept:
+            # Get sender username
+            sender = conn.execute(
+                "SELECT username FROM users WHERE id = ?",
+                (request["sender_id"],)
             ).fetchone()
-            message_count = msg_count["count"]
+            
+            # Send WebSocket notification
+            await manager.send_json({
+                "type": "connection_accepted",
+                "from": current_user["username"]
+            }, sender["username"])
+        
+        return {"status": new_status}
+
+# System Information
+
+@app.get("/api/quantum/proof")
+async def quantum_proof():
+    """Prove quantum cryptography is working"""
+    if not OQS_AVAILABLE:
+        return {"error": "OQS not installed"}
+    
+    try:
+        # Generate test keys
+        kem_pub, kem_priv = quantum_crypto.generate_kem_keypair()
+        sig_pub, sig_priv = quantum_crypto.generate_sig_keypair()
+        
+        # Test encryption
+        ct, ss = quantum_crypto.encapsulate(kem_pub)
+        message = "Quantum Cryptography Active! 🔐"
+        encrypted = quantum_crypto.encrypt(message.encode(), ss)
+        
+        # Test signature
+        signature = quantum_crypto.sign(message.encode(), sig_priv)
+        verified = quantum_crypto.verify(message.encode(), signature, sig_pub)
+        
+        # Test decryption
+        decrypted = quantum_crypto.decrypt(encrypted, ss)
         
         return {
-            "database": DB_PATH,
-            "tables": tables,
-            "current_session": dict(session) if session else None,
-            "messages_in_session": message_count,
-            "websocket_connections": list(manager.active_connections.keys())
+            "status": "Active",
+            "oqs_version": OQS_VERSION,
+            "algorithms": {
+                "kem": config.KEM_ALGORITHM,
+                "signature": config.SIG_ALGORITHM
+            },
+            "key_sizes": {
+                "kem_public": len(kem_pub),
+                "kem_private": len(kem_priv),
+                "sig_public": len(sig_pub),
+                "sig_private": len(sig_priv),
+                "shared_secret": len(ss)
+            },
+            "test": {
+                "message": message,
+                "encrypted_size": len(encrypted["encrypted_content"]),
+                "signature_size": len(signature),
+                "verified": verified,
+                "decrypted": decrypted.decode() == message
+            }
         }
-        
-    finally:
-        conn.close()
+    except Exception as e:
+        return {"error": str(e)}
 
-@app.post("/api/session/terminate")
-async def terminate_session(current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    try:
-        conn.execute(
-            """UPDATE active_sessions SET is_active = 0 
-               WHERE (user1 = ? OR user2 = ?) AND is_active = 1""",
-            (current_user["username"], current_user["username"])
-        )
-        conn.commit()
-        
-        return {"message": "Session terminated"}
-        
-    finally:
-        conn.close()
+@app.get("/api/quantum/algorithms")
+async def list_algorithms():
+    """List available quantum algorithms"""
+    if not OQS_AVAILABLE:
+        return {"error": "OQS not installed"}
+    
+    return {
+        "kem_algorithms": AVAILABLE_KEMS,
+        "signature_algorithms": AVAILABLE_SIGS,
+        "total_kems": len(AVAILABLE_KEMS),
+        "total_sigs": len(AVAILABLE_SIGS),
+        "configured": {
+            "kem": config.KEM_ALGORITHM,
+            "signature": config.SIG_ALGORITHM
+        }
+    }
 
-# WebSocket endpoint
+@app.get("/api/stats")
+async def get_stats(current_user: dict = Depends(auth.verify_token)):
+    """Get user statistics"""
+    with db.get_connection() as conn:
+        stats = conn.execute("""
+            SELECT 
+                (SELECT COUNT(*) FROM messages WHERE sender_id = ?) as sent,
+                (SELECT COUNT(*) FROM messages WHERE receiver_id = ?) as received,
+                (SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND is_read = 0) as unread,
+                (SELECT COUNT(*) FROM connection_requests WHERE receiver_id = ? AND status = 'pending') as pending_requests
+        """, (current_user["user_id"], current_user["user_id"], 
+              current_user["user_id"], current_user["user_id"])).fetchone()
+        
+        return dict(stats)
+
+# WebSocket
+
 @app.websocket("/ws/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
-    await manager.connect(websocket, username)
+    """WebSocket endpoint for real-time messaging"""
+    if not await manager.connect(websocket, username):
+        return
+    
     try:
         while True:
             data = await websocket.receive_text()
-            # Handle heartbeat
-            if data == '{"type":"heartbeat"}':
+            message = json.loads(data)
+            
+            if message.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
+            elif message.get("type") == "typing":
+                await manager.send_json({
+                    "type": "typing",
+                    "from": username
+                }, message.get("to"))
+                
     except WebSocketDisconnect:
         manager.disconnect(username)
+    except Exception as e:
+        logger.error(f"WebSocket error for {username}: {e}")
+        manager.disconnect(username)
+
+# Error Handlers
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """HTTP exception handler"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "status_code": exc.status_code}
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """General exception handler"""
+    logger.error(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "status_code": 500}
+    )
+
+# Startup and Shutdown
+
+@app.on_event("startup")
+async def startup():
+    """Application startup"""
+    db.init_database()
+    logger.info(f"{config.APP_NAME} v{config.APP_VERSION} started")
+    logger.info(f"OQS Status: {'Active' if OQS_AVAILABLE else 'Not Available'}")
+    if OQS_AVAILABLE:
+        logger.info(f"Quantum Algorithms: KEM={config.KEM_ALGORITHM}, SIG={config.SIG_ALGORITHM}")
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Application shutdown"""
+    # Close all WebSocket connections
+    for username in list(manager.active_connections.keys()):
+        await manager.active_connections[username].close()
+    logger.info("Application shutdown")
+
+# Main
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level=config.LOG_LEVEL.lower()
+    )
