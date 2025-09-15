@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 import os
+import sys
 
 app = FastAPI(title="QMS Minimal Test")
 
@@ -8,7 +9,7 @@ def health():
     return {
         "status": "healthy",
         "service": "QMS Platform - Minimal Version",
-        "python_version": os.sys.version,
+        "python_version": sys.version,
         "environment": os.environ.get("AZURE_ENV", "development")
     }
 
