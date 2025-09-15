@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Database configuration - Azure PostgreSQL or local SQLite
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "sqlite:///./qms_quantum.db"  # Fallback for local development
+    "sqlite:////tmp/qms_quantum.db"  # Azure needs /tmp/ for write access
 )
 
 # For Azure PostgreSQL, convert the connection string if needed
@@ -67,7 +67,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Security configuration from environment
-SECRET_KEY = os.environ.get("JWT_SECRET", "quantum-secure-key-" + os.urandom(32).hex())
+SECRET_KEY = os.environ.get("JWT_SECRET", "quantum-secure-default-key-change-this-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("TOKEN_EXPIRE_MINUTES", "1440"))
 BCRYPT_ROUNDS = int(os.environ.get("BCRYPT_ROUNDS", "12"))
@@ -252,6 +252,18 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"]
 )
+
+# ========== ROOT ENDPOINT ==========
+
+@app.get("/")
+def root():
+    return {
+        "message": "QMS Backend Running",
+        "docs": "/docs" if not IS_PRODUCTION else "API Documentation disabled in production",
+        "health": "/api/health",
+        "version": "2.1.0",
+        "quantum_ready": True
+    }
 
 # ========== PYDANTIC MODELS ==========
 
@@ -1170,7 +1182,7 @@ if __name__ == "__main__":
     import uvicorn
     
     # Azure App Service sets PORT environment variable
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", "8000"))  # Ensure string default
     
     logger.info(f"Starting QMS Platform on port {port}")
     logger.info(f"Environment: {AZURE_ENV}")
