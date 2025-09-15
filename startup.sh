@@ -1,11 +1,15 @@
 #!/bin/bash
 
-# Quantum Messaging System - Production Startup Script
-# For Azure App Service deployment
-
-echo "Starting Quantum Messaging System..."
-echo "Environment: ${AZURE_ENV:-production}"
+echo "Starting QMS Backend Setup..."
 echo "Python version: $(python --version)"
+echo "Working directory: $(pwd)"
+
+# Install dependencies first
+echo "Installing Python dependencies..."
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+echo "Dependencies installed successfully"
 
 # Set environment variables
 export PYTHONUNBUFFERED=1
@@ -17,46 +21,31 @@ export DB_PATH=${DB_PATH:-/tmp/qms.db}
 mkdir -p /tmp/logs
 mkdir -p /tmp/uploads
 
-# Database initialization
-echo "Initializing database..."
-python -c "
-import sqlite3
-from app import init_database
-init_database()
-print('Database initialized successfully')
-"
+echo "Starting application with gunicorn..."
 
-# Check if running on Azure
+# Check if running on Azure (simpler detection)
 if [ ! -z "$WEBSITE_INSTANCE_ID" ]; then
     echo "Running on Azure App Service"
-    echo "Instance ID: $WEBSITE_INSTANCE_ID"
-    
-    # Use Azure's port
+    # Use Azure's port or default to 8000
     PORT=${WEBSITE_PORT:-8000}
     
     # Start with gunicorn for production
-    echo "Starting Gunicorn with Uvicorn workers..."
     exec gunicorn \
-        --bind 0.0.0.0:$PORT \
-        --workers 2 \
-        --worker-class uvicorn.workers.UvicornWorker \
+        --bind=0.0.0.0:$PORT \
         --timeout 600 \
-        --keep-alive 5 \
-        --max-requests 1000 \
-        --max-requests-jitter 50 \
-        --access-logfile - \
-        --error-logfile - \
-        --log-level ${LOG_LEVEL,,} \
+        --workers 1 \
+        --worker-class uvicorn.workers.UvicornWorker \
         app:app
 else
     echo "Running in development mode"
     PORT=${PORT:-8000}
     
-    # Use uvicorn directly for development
-    echo "Starting Uvicorn..."
-    exec uvicorn app:app \
-        --host 0.0.0.0 \
-        --port $PORT \
+    # Use gunicorn for consistency
+    exec gunicorn \
+        --bind=0.0.0.0:$PORT \
+        --timeout 600 \
+        --workers 1 \
+        --worker-class uvicorn.workers.UvicornWorker \
         --reload \
-        --log-level ${LOG_LEVEL,,}
+        app:app
 fi
