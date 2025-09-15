@@ -1,27 +1,51 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Request, WebSocket, WebSocketDisconnect, Header
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Text, Integer, ForeignKey, or_, and_, desc
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
-from pydantic import BaseModel, Field, EmailStr, field_validator
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
-import jwt
-import bcrypt
-import json
-import uuid
-import base64
-import httpx
-import os
-import hashlib
-import logging
-import traceback
-import asyncio
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
+import sys
+print(f"Python version: {sys.version}", file=sys.stderr)
+print("Starting app...", file=sys.stderr)
+
+try:
+    from fastapi import FastAPI, HTTPException, Depends, status, Request, WebSocket, WebSocketDisconnect, Header
+    print("FastAPI imported successfully", file=sys.stderr)
+    
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+    print("FastAPI components imported successfully", file=sys.stderr)
+    
+    from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Text, Integer, ForeignKey, or_, and_, desc
+    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm import sessionmaker, Session, relationship
+    print("SQLAlchemy imported successfully", file=sys.stderr)
+    
+    from pydantic import BaseModel, Field, EmailStr, field_validator
+    print("Pydantic imported successfully", file=sys.stderr)
+    
+    from datetime import datetime, timedelta
+    from typing import Optional, List, Dict, Any
+    import jwt
+    import bcrypt
+    import json
+    import uuid
+    import base64
+    import httpx
+    import os
+    import hashlib
+    import logging
+    import traceback
+    import asyncio
+    print("Standard libraries imported successfully", file=sys.stderr)
+    
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes
+    print("Cryptography imported successfully", file=sys.stderr)
+
+except Exception as e:
+    print(f"Import error: {e}", file=sys.stderr)
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+
+print("All imports successful, continuing with app initialization...", file=sys.stderr)
 
 # Azure Environment Configuration
 AZURE_ENV = os.environ.get("AZURE_ENV", "development")
