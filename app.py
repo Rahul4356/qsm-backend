@@ -10,10 +10,11 @@ try:
     from fastapi.responses import JSONResponse
     print("FastAPI components imported successfully", file=sys.stderr)
     
-    from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Text, Integer, ForeignKey, or_, and_, desc
-    from sqlalchemy.ext.declarative import declarative_base
-    from sqlalchemy.orm import sessionmaker, Session, relationship
-    print("SQLAlchemy imported successfully", file=sys.stderr)
+    # TinyDB for Python 3.13 compatibility
+    from tinydb import TinyDB, Query
+    from tinydb.storages import JSONStorage
+    from tinydb.middlewares import CachingMiddleware
+    print("TinyDB imported successfully", file=sys.stderr)
     
     from pydantic import BaseModel, Field, EmailStr, field_validator
     print("Pydantic imported successfully", file=sys.stderr)
@@ -67,28 +68,113 @@ DATABASE_URL = os.environ.get(
     "sqlite:////tmp/qms_quantum.db"  # Azure needs /tmp/ for write access
 )
 
-# For Azure PostgreSQL, convert the connection string if needed
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+# ========== DATABASE SETUP WITH TINYDB ==========
 
-# Create engine with appropriate settings
-if DATABASE_URL.startswith("postgresql"):
-    engine = create_engine(
-        DATABASE_URL,
-        pool_pre_ping=True,
-        pool_recycle=300,
-        connect_args={
-            "sslmode": "require" if IS_PRODUCTION else "prefer"
-        }
-    )
-else:
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={"check_same_thread": False}
-    )
+# Database path for Azure or local
+DB_PATH = os.environ.get("DB_PATH", "/tmp/qms_database.json")
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# Initialize TinyDB with caching for better performance
+db = TinyDB(DB_PATH, storage=CachingMiddleware(JSONStorage))
+
+# Define tables
+users_table = db.table('users')
+connection_requests_table = db.table('connection_requests')
+secure_sessions_table = db.table('secure_sessions')
+messages_table = db.table('messages')
+audit_logs_table = db.table('audit_logs')
+
+# Query objects for convenient access
+UserQuery = Query()
+ConnectionRequestQuery = Query()
+SecureSessionQuery = Query()
+MessageQuery = Query()
+AuditLogQuery = Query()
+
+print("TinyDB database initialized successfully", file=sys.stderr)
+
+# Database helper functions
+def get_current_timestamp():
+    return datetime.utcnow().isoformat()
+
+def create_user_document(username: str, email: str, hashed_password: str):
+    return {
+        'id': str(uuid.uuid4()),
+        'username': username,
+        'email': email,
+        'hashed_password': hashed_password,
+        'created_at': get_current_timestamp(),
+        'is_active': True,
+        'last_seen': get_current_timestamp(),
+        'public_keys': None,
+        'key_generation_timestamp': None
+    }
+
+def create_connection_request_document(sender_id: str, receiver_id: str, sender_public_keys: str):
+    return {
+        'id': str(uuid.uuid4()),
+        'sender_id': sender_id,
+        'receiver_id': receiver_id,
+        'sender_public_keys': sender_public_keys,
+        'receiver_public_keys': None,
+        'status': 'pending',
+        'created_at': get_current_timestamp(),
+        'responded_at': None,
+        'expires_at': (datetime.utcnow() + timedelta(hours=24)).isoformat()
+    }
+
+def create_secure_session_document(user1_id: str, user2_id: str, request_id: str = None):
+    return {
+        'id': str(uuid.uuid4()),
+        'user1_id': user1_id,
+        'user2_id': user2_id,
+        'request_id': request_id,
+        'shared_secret': None,
+        'ciphertext': None,
+        'session_metadata': None,
+        'established_at': get_current_timestamp(),
+        'last_activity': get_current_timestamp(),
+        'terminated_at': None,
+        'termination_reason': None,
+        'is_active': True,
+        'message_count': 0
+    }
+
+def create_message_document(session_id: str, sender_id: str, receiver_id: str, encrypted_content: str, nonce: str, tag: str):
+    return {
+        'id': str(uuid.uuid4()),
+        'session_id': session_id,
+        'sender_id': sender_id,
+        'receiver_id': receiver_id,
+        'encrypted_content': encrypted_content,
+        'nonce': nonce,
+        'tag': tag,
+        'aad': None,
+        'falcon_signature': None,
+        'ecdsa_signature': None,
+        'signature_metadata': None,
+        'message_type': 'secured',
+        'timestamp': get_current_timestamp(),
+        'delivered_at': None,
+        'read_at': None,
+        'is_read': False,
+        'is_deleted_sender': False,
+        'is_deleted_receiver': False
+    }
+
+def create_audit_log_document(user_id: str = None, action: str = None, details: str = None, ip_address: str = None, user_agent: str = None):
+    return {
+        'id': str(uuid.uuid4()),
+        'user_id': user_id,
+        'action': action,
+        'details': details,
+        'ip_address': ip_address,
+        'user_agent': user_agent,
+        'timestamp': get_current_timestamp()
+    }
+
+# Database session dependency (replaces SQLAlchemy dependency)
+def get_db():
+    return db
 
 # Security configuration from environment
 SECRET_KEY = os.environ.get("JWT_SECRET", "quantum-secure-default-key-change-this-in-production")
@@ -150,105 +236,145 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== DATABASE MODELS ==========
+# ========== DATABASE MODELS REPLACED WITH TINYDB FUNCTIONS ==========
 
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    username = Column(String(50), unique=True, index=True, nullable=False)
-    email = Column(String(100), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Boolean, default=True)
-    last_seen = Column(DateTime, default=datetime.utcnow)
-    public_keys = Column(Text, nullable=True)
-    key_generation_timestamp = Column(DateTime, nullable=True)
-    
-    sent_requests = relationship("ConnectionRequest", foreign_keys="ConnectionRequest.sender_id", back_populates="sender", cascade="all, delete-orphan")
-    received_requests = relationship("ConnectionRequest", foreign_keys="ConnectionRequest.receiver_id", back_populates="receiver", cascade="all, delete-orphan")
-    sent_messages = relationship("Message", foreign_keys="Message.sender_id", back_populates="sender", cascade="all, delete-orphan")
-    received_messages = relationship("Message", foreign_keys="Message.receiver_id", back_populates="receiver", cascade="all, delete-orphan")
+# User management functions
+def get_user_by_username(username: str):
+    """Get user by username"""
+    result = users_table.search(UserQuery.username == username)
+    return result[0] if result else None
 
-class ConnectionRequest(Base):
-    __tablename__ = "connection_requests"
-    
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    sender_id = Column(String, ForeignKey("users.id"))
-    receiver_id = Column(String, ForeignKey("users.id"))
-    sender_public_keys = Column(Text, nullable=False)
-    receiver_public_keys = Column(Text, nullable=True)
-    status = Column(String(20), default="pending")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    responded_at = Column(DateTime, nullable=True)
-    expires_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=24))
-    
-    sender = relationship("User", foreign_keys=[sender_id], back_populates="sent_requests")
-    receiver = relationship("User", foreign_keys=[receiver_id], back_populates="received_requests")
+def get_user_by_email(email: str):
+    """Get user by email"""
+    result = users_table.search(UserQuery.email == email)
+    return result[0] if result else None
 
-class SecureSession(Base):
-    __tablename__ = "secure_sessions"
-    
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user1_id = Column(String, ForeignKey("users.id"))
-    user2_id = Column(String, ForeignKey("users.id"))
-    request_id = Column(String, ForeignKey("connection_requests.id"), nullable=True)
-    shared_secret = Column(Text, nullable=True)
-    ciphertext = Column(Text, nullable=True)
-    session_metadata = Column(Text, nullable=True)
-    established_at = Column(DateTime, default=datetime.utcnow)
-    last_activity = Column(DateTime, default=datetime.utcnow)
-    terminated_at = Column(DateTime, nullable=True)
-    termination_reason = Column(String(100), nullable=True)
-    is_active = Column(Boolean, default=True)
-    message_count = Column(Integer, default=0)
-    
-    user1 = relationship("User", foreign_keys=[user1_id])
-    user2 = relationship("User", foreign_keys=[user2_id])
-    connection_request = relationship("ConnectionRequest", foreign_keys=[request_id])
-    messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
+def get_user_by_id(user_id: str):
+    """Get user by ID"""
+    result = users_table.search(UserQuery.id == user_id)
+    return result[0] if result else None
 
-class Message(Base):
-    __tablename__ = "messages"
-    
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id = Column(String, ForeignKey("secure_sessions.id"))
-    sender_id = Column(String, ForeignKey("users.id"))
-    receiver_id = Column(String, ForeignKey("users.id"))
-    encrypted_content = Column(Text, nullable=False)
-    nonce = Column(String(32), nullable=False)
-    tag = Column(String(32), nullable=False)
-    aad = Column(Text, nullable=True)
-    falcon_signature = Column(Text, nullable=True)
-    ecdsa_signature = Column(Text, nullable=True)
-    signature_metadata = Column(Text, nullable=True)
-    message_type = Column(String(20), default="secured")
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    delivered_at = Column(DateTime, nullable=True)
-    read_at = Column(DateTime, nullable=True)
-    is_read = Column(Boolean, default=False)
-    is_deleted_sender = Column(Boolean, default=False)
-    is_deleted_receiver = Column(Boolean, default=False)
-    
-    session = relationship("SecureSession", back_populates="messages")
-    sender = relationship("User", foreign_keys=[sender_id], back_populates="sent_messages")
-    receiver = relationship("User", foreign_keys=[receiver_id], back_populates="received_messages")
+def create_user(username: str, email: str, hashed_password: str):
+    """Create a new user"""
+    user_doc = create_user_document(username, email, hashed_password)
+    users_table.insert(user_doc)
+    return user_doc
 
-class AuditLog(Base):
-    __tablename__ = "audit_logs"
-    
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String, ForeignKey("users.id"), nullable=True)
-    action = Column(String(100), nullable=False)
-    details = Column(Text, nullable=True)
-    ip_address = Column(String(45), nullable=True)
-    user_agent = Column(Text, nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    
-    user = relationship("User", foreign_keys=[user_id])
+def update_user_last_seen(user_id: str):
+    """Update user's last seen timestamp"""
+    users_table.update({'last_seen': get_current_timestamp()}, UserQuery.id == user_id)
 
-# Create tables
-Base.metadata.create_all(bind=engine)
+def update_user_public_keys(user_id: str, public_keys: str):
+    """Update user's public keys"""
+    users_table.update({
+        'public_keys': public_keys,
+        'key_generation_timestamp': get_current_timestamp()
+    }, UserQuery.id == user_id)
+
+# Connection request management functions  
+def create_connection_request(sender_id: str, receiver_id: str, sender_public_keys: str):
+    """Create a new connection request"""
+    request_doc = create_connection_request_document(sender_id, receiver_id, sender_public_keys)
+    connection_requests_table.insert(request_doc)
+    return request_doc
+
+def get_connection_request_by_id(request_id: str):
+    """Get connection request by ID"""
+    result = connection_requests_table.search(ConnectionRequestQuery.id == request_id)
+    return result[0] if result else None
+
+def get_pending_requests_for_user(user_id: str):
+    """Get pending connection requests for a user"""
+    return connection_requests_table.search(
+        (ConnectionRequestQuery.receiver_id == user_id) & 
+        (ConnectionRequestQuery.status == 'pending')
+    )
+
+def update_connection_request_status(request_id: str, status: str, receiver_public_keys: str = None):
+    """Update connection request status"""
+    update_data = {
+        'status': status,
+        'responded_at': get_current_timestamp()
+    }
+    if receiver_public_keys:
+        update_data['receiver_public_keys'] = receiver_public_keys
+    
+    connection_requests_table.update(update_data, ConnectionRequestQuery.id == request_id)
+
+# Secure session management functions
+def create_secure_session(user1_id: str, user2_id: str, request_id: str = None):
+    """Create a new secure session"""
+    session_doc = create_secure_session_document(user1_id, user2_id, request_id)
+    secure_sessions_table.insert(session_doc)
+    return session_doc
+
+def get_secure_session_by_id(session_id: str):
+    """Get secure session by ID"""
+    result = secure_sessions_table.search(SecureSessionQuery.id == session_id)
+    return result[0] if result else None
+
+def get_active_sessions_for_user(user_id: str):
+    """Get active sessions for a user"""
+    return secure_sessions_table.search(
+        ((SecureSessionQuery.user1_id == user_id) | (SecureSessionQuery.user2_id == user_id)) &
+        (SecureSessionQuery.is_active == True)
+    )
+
+def update_session_activity(session_id: str):
+    """Update session last activity"""
+    secure_sessions_table.update({
+        'last_activity': get_current_timestamp()
+    }, SecureSessionQuery.id == session_id)
+
+def terminate_session(session_id: str, reason: str = None):
+    """Terminate a secure session"""
+    secure_sessions_table.update({
+        'is_active': False,
+        'terminated_at': get_current_timestamp(),
+        'termination_reason': reason
+    }, SecureSessionQuery.id == session_id)
+
+# Message management functions
+def create_message(session_id: str, sender_id: str, receiver_id: str, encrypted_content: str, nonce: str, tag: str):
+    """Create a new message"""
+    message_doc = create_message_document(session_id, sender_id, receiver_id, encrypted_content, nonce, tag)
+    messages_table.insert(message_doc)
+    
+    # Update session message count
+    session = get_secure_session_by_id(session_id)
+    if session:
+        new_count = session.get('message_count', 0) + 1
+        secure_sessions_table.update({
+            'message_count': new_count,
+            'last_activity': get_current_timestamp()
+        }, SecureSessionQuery.id == session_id)
+    
+    return message_doc
+
+def get_messages_for_session(session_id: str, limit: int = 50):
+    """Get messages for a session"""
+    messages = messages_table.search(MessageQuery.session_id == session_id)
+    # Sort by timestamp (newest first) and limit
+    messages.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    return messages[:limit]
+
+def mark_message_as_read(message_id: str):
+    """Mark message as read"""
+    messages_table.update({
+        'is_read': True,
+        'read_at': get_current_timestamp()
+    }, MessageQuery.id == message_id)
+
+# Audit log functions
+def create_audit_log(user_id: str = None, action: str = None, details: str = None, ip_address: str = None, user_agent: str = None):
+    """Create an audit log entry"""
+    audit_doc = create_audit_log_document(user_id, action, details, ip_address, user_agent)
+    audit_logs_table.insert(audit_doc)
+    return audit_doc
+
+print("TinyDB database functions initialized successfully", file=sys.stderr)
+
+# TinyDB doesn't need table creation - they're created automatically
 
 # ========== FASTAPI APP ==========
 
@@ -337,11 +463,8 @@ class SessionStatus(BaseModel):
 # ========== HELPER FUNCTIONS ==========
 
 def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    # TinyDB doesn't need session management like SQLAlchemy
+    return db
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -368,24 +491,21 @@ def verify_token(token: str = Depends(get_token_from_header)):
     except jwt.InvalidTokenError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
-def get_current_user(username: str = Depends(verify_token), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == username).first()
+def get_current_user(username: str = Depends(verify_token)):
+    user = get_user_by_username(username)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if not user.is_active:
+    if not user.get('is_active', True):
         raise HTTPException(status_code=403, detail="User account is inactive")
     
-    user.last_seen = datetime.utcnow()
-    db.commit()
+    # Update last seen
+    update_user_last_seen(user['id'])
     return user
 
-def get_active_session(user_id: str, db: Session) -> Optional[SecureSession]:
-    return db.query(SecureSession).filter(
-        or_(
-            and_(SecureSession.user1_id == user_id, SecureSession.is_active == True),
-            and_(SecureSession.user2_id == user_id, SecureSession.is_active == True)
-        )
-    ).first()
+def get_active_session(user_id: str) -> Optional[dict]:
+    """Get active session for a user using TinyDB"""
+    sessions = get_active_sessions_for_user(user_id)
+    return sessions[0] if sessions else None
 
 def encrypt_message(plaintext: str, shared_secret: bytes) -> tuple:
     nonce = os.urandom(12)
@@ -442,12 +562,13 @@ def decrypt_message(ciphertext_b64: str, nonce_b64: str, tag_b64: str, shared_se
         logger.error(f"Decryption failed: {str(e)}")
         raise ValueError("Message decryption failed")
 
-def cleanup_expired_requests(db: Session):
-    try:
-        expired = db.query(ConnectionRequest).filter(
-            ConnectionRequest.status == "pending",
-            ConnectionRequest.expires_at < datetime.utcnow()
-        ).all()
+# TODO: Replace with TinyDB version
+# def cleanup_expired_requests(db: Session):
+#     try:
+#         expired = db.query(ConnectionRequest).filter(
+#             ConnectionRequest.status == "pending",
+#             ConnectionRequest.expires_at < datetime.utcnow()
+#         ).all()
         
         for req in expired:
             req.status = "expired"
