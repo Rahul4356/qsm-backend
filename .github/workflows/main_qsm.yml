@@ -64,4 +64,4 @@ jobs:
         with:
           app-name: 'qsm'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_0ECCF8FD76C6412294670B1B4BF0A097 }}
