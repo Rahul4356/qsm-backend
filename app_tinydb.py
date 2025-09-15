@@ -339,6 +339,42 @@ async def get_database_info():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+# ========== FRONTEND COMPATIBILITY ENDPOINTS ==========
+
+@app.get("/api/config")
+async def get_frontend_config():
+    """Configuration endpoint for frontend"""
+    return {
+        "backend_url": f"https://{os.environ.get('WEBSITE_HOSTNAME', 'localhost:8000')}",
+        "api_version": "2.0.0",
+        "features": {
+            "authentication": True,
+            "quantum_crypto": True,
+            "user_management": True
+        },
+        "environment": "production" if IS_PRODUCTION else "development"
+    }
+
+@app.post("/api/login")
+async def login_compatibility(credentials: UserLogin, request: Request = None):
+    """Compatibility endpoint for frontend - redirects to /api/auth/login"""
+    return await login(credentials, request)
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "QMS Backend API - TinyDB Version",
+        "version": "2.0.0",
+        "status": "operational",
+        "endpoints": {
+            "health": "/api/health",
+            "auth": "/api/auth/*",
+            "config": "/api/config",
+            "docs": "/docs"
+        }
+    }
+
 # ========== MAIN ==========
 
 if __name__ == "__main__":
