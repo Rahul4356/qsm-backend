@@ -31,11 +31,15 @@ app.add_middleware(
 )
 
 # Database setup
+logger.info(f"Environment check - WEBSITE_SITE_NAME: {os.environ.get('WEBSITE_SITE_NAME')}")
+logger.info(f"Environment check - PORT: {os.environ.get('PORT')}")
+
 if os.environ.get("WEBSITE_SITE_NAME"):  # Azure environment
     db_path = "/tmp/qms_db.json"
+    logger.info(f"Azure environment detected, using database path: {db_path}")
     try:
         db = TinyDB(db_path)
-        logger.info(f"TinyDB initialized at {db_path}")
+        logger.info(f"TinyDB initialized successfully at {db_path}")
     except Exception as e:
         logger.error(f"Failed to initialize TinyDB: {e}")
         # Fallback to in-memory database
@@ -43,6 +47,7 @@ if os.environ.get("WEBSITE_SITE_NAME"):  # Azure environment
         logger.info("Using in-memory TinyDB as fallback")
 else:
     # Local development
+    logger.info("Local development environment detected")
     db = TinyDB('qms_db.json')
 
 users_table = db.table('users')
@@ -258,4 +263,6 @@ async def internal_error_handler(request, exc):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Starting server on port {port}")
+    logger.info(f"App title: {app.title}")
     uvicorn.run(app, host="0.0.0.0", port=port)
