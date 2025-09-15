@@ -1,10 +1,25 @@
+# Core dependencies
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
 pydantic==2.5.3
 pydantic[email]
-bcrypt==4.1.2
-PyJWT==2.8.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 websockets==12.0
+
+# Cryptography
 cryptography==42.0.2
-# Note: liboqs-python is installed from source in workflow
+bcrypt==4.1.2
+PyJWT==2.8.0
+
+# Database
+sqlalchemy==2.0.23
+
+# Azure specific
+azure-storage-blob==12.19.0
+azure-identity==1.15.0
+
+# Quantum crypto - Note: liboqs-python requires liboqs to be installed separately
+# For local development, build from source
+# For Azure, we'll use a Docker container with liboqs pre-installed

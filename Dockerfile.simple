@@ -1,0 +1,46 @@
+FROM python:3.11-slim
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    cmake \
+    gcc \
+    g++ \
+    libssl-dev \
+    ninja-build \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Build and install liboqs - optimized for smaller size
+RUN git clone --depth 1 -b main https://github.com/open-quantum-safe/liboqs.git && \
+    cd liboqs && \
+    mkdir build && cd build && \
+    cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DOQS_BUILD_ONLY_LIB=ON -DBUILD_SHARED_LIBS=ON .. && \
+    ninja && \
+    ninja install && \
+    ldconfig && \
+    cd ../.. && \
+    rm -rf liboqs
+
+# Install Python dependencies with optimized liboqs-python
+COPY requirements.txt .
+RUN pip install --no-cache-dir cython numpy && \
+    git clone --depth 1 https://github.com/open-quantum-safe/liboqs-python.git && \
+    cd liboqs-python && \
+    pip install . && \
+    cd .. && \
+    rm -rf liboqs-python && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install gunicorn
+
+# Copy application
+COPY . .
+
+# Create database directory
+RUN mkdir -p /app/data
+
+EXPOSE 8000
+
+# Use gunicorn for production deployment
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "uvicorn.workers.UvicornWorker", "app:app"]
