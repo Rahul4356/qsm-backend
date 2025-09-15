@@ -1,3 +1,13 @@
 fastapi==0.115.0
 uvicorn==0.30.6
 gunicorn==21.2.0
+pydantic[email]==2.9.2
+bcrypt==4.2.0
+pyjwt==2.9.0
+python-multipart==0.0.9
+pyotp==2.9.0
+qrcode==7.4.2
+pillow==10.2.0
+aiofiles==23.2.1
+slowapi==0.1.9
+tinydb==4.8.0
