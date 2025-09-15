@@ -121,7 +121,7 @@ security = HTTPBearer()
 # ============= DATA MODELS =============
 
 class UserRegister(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50, regex="^[a-zA-Z0-9_-]+$")
+    username: str = Field(..., min_length=3, max_length=50, pattern="^[a-zA-Z0-9_-]+$")
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=100)
     
@@ -149,7 +149,7 @@ class ConnectionResponse(BaseModel):
 class MessageSend(BaseModel):
     to_username: str
     content: str = Field(..., max_length=config.MAX_MESSAGE_LENGTH)
-    message_type: str = Field(default="secured", regex="^(secured|critical)$")
+    message_type: str = Field(default="secured", pattern="^(secured|critical)$")
 
 class GetMessagesRequest(BaseModel):
     username: str
