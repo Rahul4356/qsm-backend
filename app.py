@@ -727,21 +727,40 @@ async def respond_to_connection(
             sender_keys = json.loads(conn_request.sender_public_keys)
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                encap_response = await client.post(
-                    f"{QUANTUM_API}/api/quantum/encapsulate",
-                    json={
-                        "receiver_public_key": sender_keys["ml_kem_768"],
-                        "sender_id": current_user.id,
-                        "session_id": str(uuid.uuid4())
-                    }
-                )
-                
-                if encap_response.status_code != 200:
-                    logger.error(f"Quantum encapsulation failed: {encap_response.text}")
+                try:
+                    encap_response = await client.post(
+                        f"{QUANTUM_API}/api/quantum/encapsulate",
+                        json={
+                            "receiver_public_key": sender_keys["ml_kem_768"],
+                            "sender_id": current_user.id,
+                            "session_id": str(uuid.uuid4())
+                        }
+                    )
+                    
+                    if encap_response.status_code != 200:
+                        logger.error(f"Quantum encapsulation failed: {encap_response.text}")
+                        db.rollback()
+                        raise HTTPException(
+                            status_code=500, 
+                            detail="Quantum key exchange failed. Please ensure both services are running."
+                        )
+                    
+                    encap_data = encap_response.json()
+                    
+                except httpx.ConnectError:
+                    logger.error("Cannot connect to quantum crypto service")
                     db.rollback()
-                    raise HTTPException(status_code=500, detail="Quantum key exchange failed")
-                
-                encap_data = encap_response.json()
+                    raise HTTPException(
+                        status_code=503, 
+                        detail="Quantum crypto service is unavailable. Please ensure the service is running on port 8001."
+                    )
+                except httpx.TimeoutException:
+                    logger.error("Quantum service timeout")
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=504, 
+                        detail="Quantum crypto service timeout. Service may be overloaded."
+                    )
             
             session = SecureSession(
                 user1_id=conn_request.sender_id,
@@ -836,21 +855,38 @@ async def send_message(
     ciphertext, nonce, tag = encrypt_message(message.content, shared_secret)
     
     async with httpx.AsyncClient(timeout=30.0) as client:
-        sign_response = await client.post(
-            f"{QUANTUM_API}/api/quantum/wrap_sign",
-            json={
-                "message": message.content,
-                "user_id": current_user.username,
-                "signature_type": "wrap_sign" if message.message_type == "critical" else "falcon_only",
-                "hash_algorithm": "SHA256"
-            }
-        )
-        
-        if sign_response.status_code != 200:
-            logger.error(f"Signature creation failed: {sign_response.text}")
-            raise HTTPException(status_code=500, detail="Signature creation failed")
-        
-        signatures = sign_response.json()
+        try:
+            sign_response = await client.post(
+                f"{QUANTUM_API}/api/quantum/wrap_sign",
+                json={
+                    "message": message.content,
+                    "user_id": current_user.username,
+                    "signature_type": "wrap_sign" if message.message_type == "critical" else "falcon_only",
+                    "hash_algorithm": "SHA256"
+                }
+            )
+            
+            if sign_response.status_code != 200:
+                logger.error(f"Signature creation failed: {sign_response.text}")
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Message signature creation failed. Please ensure both services are running."
+                )
+            
+            signatures = sign_response.json()
+            
+        except httpx.ConnectError:
+            logger.error("Cannot connect to quantum crypto service for signing")
+            raise HTTPException(
+                status_code=503, 
+                detail="Quantum crypto service is unavailable for message signing. Please ensure the service is running on port 8001."
+            )
+        except httpx.TimeoutException:
+            logger.error("Quantum service timeout during signing")
+            raise HTTPException(
+                status_code=504, 
+                detail="Quantum crypto service timeout during message signing. Service may be overloaded."
+            )
     
     receiver_id = session.user2_id if session.user1_id == current_user.id else session.user1_id
     
@@ -1082,8 +1118,8 @@ def get_available_users(
 # ========== SYSTEM ENDPOINTS ==========
 
 @app.get("/api/health")
-def health_check():
-    return {
+async def health_check():
+    health_status = {
         "status": "healthy",
         "service": "QMS Platform",
         "version": "2.1.0",
@@ -1091,8 +1127,33 @@ def health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "database": "connected",
         "quantum_service": QUANTUM_API,
-        "websocket_enabled": ENABLE_WEBSOCKET
+        "websocket_enabled": ENABLE_WEBSOCKET,
+        "services": {
+            "main_app": "healthy",
+            "database": "connected",
+            "quantum_crypto": "unknown"
+        }
     }
+    
+    # Check quantum service connectivity
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{QUANTUM_API}/api/health")
+            if response.status_code == 200:
+                health_status["services"]["quantum_crypto"] = "healthy"
+                health_status["quantum_service_status"] = "connected"
+            else:
+                health_status["services"]["quantum_crypto"] = "error"
+                health_status["quantum_service_status"] = f"http_error_{response.status_code}"
+                health_status["status"] = "degraded"
+    except Exception as e:
+        health_status["services"]["quantum_crypto"] = "offline"
+        health_status["quantum_service_status"] = "connection_failed"
+        health_status["quantum_service_error"] = str(e)
+        health_status["status"] = "degraded"
+        logger.warning(f"Quantum service health check failed: {e}")
+    
+    return health_status
 
 @app.get("/api/config")
 def get_config():
