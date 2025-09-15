@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum Encryption Proof - QMS Backend</title>
+    <style>
+        body {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        h1 {
+            text-align: center;
+            color: #00ff88;
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+            margin-bottom: 30px;
+        }
+        .proof-section {
+            background: rgba(40, 40, 40, 0.9);
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 4px solid #00ff88;
+        }
+        .hex-data {
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #333;
+            border-radius: 5px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+            color: #00ff88;
+            margin: 10px 0;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid #00ff88;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #00ff88;
+        }
+        .button {
+            background: linear-gradient(45deg, #00ff88, #00cc6a);
+            border: none;
+            border-radius: 25px;
+            padding: 12px 25px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s ease;
+        }
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 255, 136, 0.4);
+        }
+        .error {
+            color: #ff4444;
+            background: rgba(255, 68, 68, 0.1);
+            border: 1px solid #ff4444;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        .loading {
+            text-align: center;
+            color: #00ff88;
+            font-size: 1.2em;
+        }
+        .timestamp {
+            color: #888;
+            font-size: 0.9em;
+            text-align: right;
+            margin-top: 10px;
+        }
+        .algorithm-tag {
+            display: inline-block;
+            background: rgba(0, 255, 136, 0.2);
+            border: 1px solid #00ff88;
+            border-radius: 15px;
+            padding: 5px 12px;
+            margin: 5px;
+            font-size: 0.8em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Quantum Encryption Proof 🔐</h1>
+        
+        <div class="proof-section">
+            <h2>📊 System Statistics</h2>
+            <div id="stats" class="stats">
+                <div class="loading">Loading statistics...</div>
+            </div>
+        </div>
+
+        <div class="proof-section">
+            <h2>🔑 Encryption Algorithms</h2>
+            <div id="algorithms">
+                <div class="loading">Loading algorithm details...</div>
+            </div>
+        </div>
+
+        <div class="proof-section">
+            <h2>🔒 Sample Encrypted Data</h2>
+            <div id="encrypted-sample">
+                <div class="loading">Loading encrypted data sample...</div>
+            </div>
+        </div>
+
+        <div class="proof-section">
+            <h2>🧪 Live Encryption Test</h2>
+            <button class="button" onclick="runEncryptionTest()">🔬 Run Live Test</button>
+            <div id="test-results"></div>
+        </div>
+
+        <div class="proof-section">
+            <h2>📋 Database Structure</h2>
+            <button class="button" onclick="showDatabaseStructure()">📊 Inspect Database</button>
+            <div id="database-structure"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        // Load initial proof data
+        async function loadProofData() {
+            try {
+                const response = await fetch(`${API_BASE}/api/proof`);
+                const data = await response.json();
+                
+                displayStats(data.statistics);
+                displayAlgorithms(data.encryption_details, data.security_guarantees);
+                displayEncryptedSample(data.sample_encrypted_data, data.quantum_key_sample);
+                
+                document.querySelector('.timestamp').textContent = 
+                    `Last updated: ${new Date(data.verification_timestamp).toLocaleString()}`;
+                    
+            } catch (error) {
+                console.error('Error loading proof data:', error);
+                document.getElementById('stats').innerHTML = 
+                    '<div class="error">Failed to load statistics</div>';
+            }
+        }
+
+        function displayStats(stats) {
+            const statsHtml = Object.entries(stats).map(([key, value]) => `
+                <div class="stat-card">
+                    <div class="stat-number">${value}</div>
+                    <div>${key.replace(/_/g, ' ').toUpperCase()}</div>
+                </div>
+            `).join('');
+            
+            document.getElementById('stats').innerHTML = statsHtml;
+        }
+
+        function displayAlgorithms(details, guarantees) {
+            const algorithmsHtml = `
+                <div>
+                    <h3>🔐 Cryptographic Algorithms</h3>
+                    ${Object.entries(details).map(([key, value]) => `
+                        <span class="algorithm-tag">${key.replace(/_/g, ' ')}: ${value}</span>
+                    `).join('')}
+                </div>
+                <div style="margin-top: 20px;">
+                    <h3>🛡️ Security Guarantees</h3>
+                    ${Object.entries(guarantees).map(([key, value]) => `
+                        <span class="algorithm-tag ${value ? 'enabled' : 'disabled'}">
+                            ${value ? '✅' : '❌'} ${key.replace(/_/g, ' ')}
+                        </span>
+                    `).join('')}
+                </div>
+            `;
+            
+            document.getElementById('algorithms').innerHTML = algorithmsHtml;
+        }
+
+        function displayEncryptedSample(sample, keyData) {
+            if (!sample) {
+                document.getElementById('encrypted-sample').innerHTML = 
+                    '<div class="error">No encrypted messages found in database</div>';
+                return;
+            }
+
+            const sampleHtml = `
+                <div>
+                    <h3>📝 Encrypted Message Sample</h3>
+                    <div class="hex-data">
+                        <strong>Encrypted Content (first 64 hex chars):</strong><br>
+                        ${sample.encrypted_sample}...
+                    </div>
+                    <p><strong>Size:</strong> ${sample.size} bytes | 
+                       <strong>Type:</strong> ${sample.message_type} | 
+                       <strong>Time:</strong> ${new Date(sample.timestamp).toLocaleString()}</p>
+                </div>
+                ${keyData ? `
+                <div style="margin-top: 20px;">
+                    <h3>🔑 Quantum Key Sample</h3>
+                    <div class="hex-data">
+                        <strong>ML-KEM Public Key (first 32 hex chars):</strong><br>
+                        ${keyData.kem_public_preview}...
+                    </div>
+                    <p><strong>KEM Public Key Size:</strong> ${keyData.kem_public_size} bytes | 
+                       <strong>Falcon Public Key Size:</strong> ${keyData.falcon_public_size} bytes</p>
+                </div>
+                ` : ''}
+            `;
+            
+            document.getElementById('encrypted-sample').innerHTML = sampleHtml;
+        }
+
+        async function runEncryptionTest() {
+            const button = event.target;
+            const resultsDiv = document.getElementById('test-results');
+            
+            button.disabled = true;
+            button.textContent = '🔄 Testing...';
+            resultsDiv.innerHTML = '<div class="loading">Running live encryption test...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/debug/encryption-test`);
+                const data = await response.json();
+                
+                if (data.test_status === 'SUCCESS') {
+                    resultsDiv.innerHTML = `
+                        <div style="margin-top: 20px;">
+                            <h3>✅ Encryption Test Successful!</h3>
+                            <p><strong>Original Message:</strong> ${data.original_message}</p>
+                            <p><strong>Decrypted Message:</strong> ${data.decrypted_message}</p>
+                            
+                            <div class="hex-data">
+                                <strong>Encrypted Data (first 128 hex chars):</strong><br>
+                                ${data.encryption_proof.encrypted_hex}
+                            </div>
+                            
+                            <div class="stats">
+                                <div class="stat-card">
+                                    <div class="stat-number">${data.encryption_proof.original_size}</div>
+                                    <div>ORIGINAL SIZE (bytes)</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-number">${data.encryption_proof.encrypted_size}</div>
+                                    <div>ENCRYPTED SIZE (bytes)</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-number">${data.encryption_proof.key_exchange_success ? 'YES' : 'NO'}</div>
+                                    <div>KEY EXCHANGE</div>
+                                </div>
+                            </div>
+                            
+                            <p><strong>Nonce:</strong> <code>${data.encryption_proof.nonce_hex}</code></p>
+                            <p><strong>Auth Tag:</strong> <code>${data.encryption_proof.tag_hex}</code></p>
+                            <div class="timestamp">Test completed: ${new Date(data.timestamp).toLocaleString()}</div>
+                        </div>
+                    `;
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">Test failed: ${data.error}</div>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Test failed: ${error.message}</div>`;
+            } finally {
+                button.disabled = false;
+                button.textContent = '🔬 Run Live Test';
+            }
+        }
+
+        async function showDatabaseStructure() {
+            const structureDiv = document.getElementById('database-structure');
+            structureDiv.innerHTML = '<div class="loading">Loading database structure...</div>';
+            
+            try {
+                // This would require authentication - show instructions instead
+                structureDiv.innerHTML = `
+                    <div class="error">
+                        <h3>🔐 Authentication Required</h3>
+                        <p>Database structure inspection requires authentication. Use the following curl command:</p>
+                        <div class="hex-data">
+curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+     ${API_BASE}/api/debug/database-structure
+                        </div>
+                        <p>Or use the debug endpoint with your login token to see encrypted message details.</p>
+                    </div>
+                `;
+            } catch (error) {
+                structureDiv.innerHTML = `<div class="error">Failed to load: ${error.message}</div>`;
+            }
+        }
+
+        // Load data when page loads
+        window.addEventListener('load', loadProofData);
+    </script>
+    
+    <div class="timestamp"></div>
+</body>
+</html>
