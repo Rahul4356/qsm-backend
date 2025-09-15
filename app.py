@@ -186,102 +186,140 @@ class DatabaseManager:
                 conn.close()
     
     @staticmethod
+    def reset_database():
+        """Reset database schema completely"""
+        try:
+            with DatabaseManager.get_connection() as conn:
+                # Drop all tables
+                tables = ['messages', 'connection_requests', 'active_sessions', 'quantum_keys', 'users']
+                for table in tables:
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")
+                conn.commit()
+                logger.info("Database reset completed")
+        except Exception as e:
+            logger.error(f"Database reset error: {e}")
+            raise
+
+    @staticmethod
     def init_database():
-        """Initialize database schema"""
-        with DatabaseManager.get_connection() as conn:
-            # Users table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL COLLATE NOCASE,
-                    email TEXT UNIQUE NOT NULL COLLATE NOCASE,
-                    password_hash TEXT NOT NULL,
-                    is_active BOOLEAN DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_login TIMESTAMP,
-                    CHECK (LENGTH(username) >= 3)
-                )
-            """)
-            
-            # Quantum keys table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS quantum_keys (
-                    user_id INTEGER PRIMARY KEY,
-                    ml_kem_public BLOB NOT NULL,
-                    ml_kem_private BLOB NOT NULL,
-                    falcon_public BLOB NOT NULL,
-                    falcon_private BLOB NOT NULL,
-                    kem_algorithm TEXT NOT NULL,
-                    sig_algorithm TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    rotated_at TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                )
-            """)
-            
-            # Active sessions
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS active_sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT UNIQUE NOT NULL,
-                    user1_id INTEGER NOT NULL,
-                    user2_id INTEGER NOT NULL,
-                    shared_secret BLOB NOT NULL,
-                    ciphertext BLOB NOT NULL,
-                    kem_algorithm TEXT NOT NULL,
-                    is_active BOOLEAN DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user1_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (user2_id) REFERENCES users(id) ON DELETE CASCADE,
-                    CHECK (user1_id < user2_id),
-                    UNIQUE(user1_id, user2_id)
-                )
-            """)
-            
-            # Messages table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT NOT NULL,
-                    sender_id INTEGER NOT NULL,
-                    receiver_id INTEGER NOT NULL,
-                    encrypted_content BLOB NOT NULL,
-                    nonce BLOB NOT NULL,
-                    tag BLOB NOT NULL,
-                    signature BLOB,
-                    message_type TEXT DEFAULT 'secured',
-                    is_read BOOLEAN DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (session_id) REFERENCES active_sessions(session_id)
-                )
-            """)
-            
-            # Connection requests
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS connection_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    sender_id INTEGER NOT NULL,
-                    receiver_id INTEGER NOT NULL,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    responded_at TIMESTAMP,
-                    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
-                    CHECK (status IN ('pending', 'accepted', 'rejected')),
-                    UNIQUE(sender_id, receiver_id)
-                )
-            """)
-            
-            # Create indexes
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_users ON active_sessions(user1_id, user2_id)")
-            
-            logger.info("Database initialized successfully")
+        """Initialize database schema with corruption handling"""
+        try:
+            with DatabaseManager.get_connection() as conn:
+                # Check if schema is corrupted by testing a simple query
+                try:
+                    conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                    tables = [row[0] for row in conn.fetchall()]
+                    
+                    # Test if messages table has correct schema
+                    if 'messages' in tables:
+                        conn.execute("PRAGMA table_info(messages)")
+                        columns = [row[1] for row in conn.fetchall()]
+                        if 'sender_id' not in columns:
+                            logger.warning("Database schema corruption detected, resetting...")
+                            DatabaseManager.reset_database()
+                except Exception as schema_error:
+                    logger.warning(f"Schema validation failed: {schema_error}, resetting database...")
+                    DatabaseManager.reset_database()
+                
+                # Create tables
+                # Users table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                        email TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                        password_hash TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_login TIMESTAMP,
+                        CHECK (LENGTH(username) >= 3)
+                    )
+                """)
+                
+                # Quantum keys table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS quantum_keys (
+                        user_id INTEGER PRIMARY KEY,
+                        ml_kem_public BLOB NOT NULL,
+                        ml_kem_private BLOB NOT NULL,
+                        falcon_public BLOB NOT NULL,
+                        falcon_private BLOB NOT NULL,
+                        kem_algorithm TEXT NOT NULL,
+                        sig_algorithm TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        rotated_at TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                """)
+                
+                # Active sessions
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS active_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT UNIQUE NOT NULL,
+                        user1_id INTEGER NOT NULL,
+                        user2_id INTEGER NOT NULL,
+                        shared_secret BLOB NOT NULL,
+                        ciphertext BLOB NOT NULL,
+                        kem_algorithm TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user1_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (user2_id) REFERENCES users(id) ON DELETE CASCADE,
+                        CHECK (user1_id < user2_id),
+                        UNIQUE(user1_id, user2_id)
+                    )
+                """)
+                
+                # Messages table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        sender_id INTEGER NOT NULL,
+                        receiver_id INTEGER NOT NULL,
+                        encrypted_content BLOB NOT NULL,
+                        nonce BLOB NOT NULL,
+                        tag BLOB NOT NULL,
+                        signature BLOB,
+                        message_type TEXT DEFAULT 'secured',
+                        is_read BOOLEAN DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (session_id) REFERENCES active_sessions(session_id)
+                    )
+                """)
+                
+                # Connection requests
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS connection_requests (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sender_id INTEGER NOT NULL,
+                        receiver_id INTEGER NOT NULL,
+                        status TEXT DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        responded_at TIMESTAMP,
+                        FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
+                        CHECK (status IN ('pending', 'accepted', 'rejected')),
+                        UNIQUE(sender_id, receiver_id)
+                    )
+                """)
+                
+                # Create indexes only after tables exist
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_users ON active_sessions(user1_id, user2_id)")
+                
+                conn.commit()
+                logger.info("Database initialized successfully")
+                
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+            raise HTTPException(status_code=500, detail="Database initialization failed")
 
 db = DatabaseManager()
 

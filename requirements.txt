@@ -20,6 +20,5 @@ sqlalchemy==2.0.23
 azure-storage-blob==12.19.0
 azure-identity==1.15.0
 
-# Quantum crypto - Note: liboqs-python requires liboqs to be installed separately
-# For local development, build from source
-# For Azure, we'll use a Docker container with liboqs pre-installed
+# Quantum crypto
+liboqs-python==0.8.0
