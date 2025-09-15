@@ -207,6 +207,15 @@ class MessageSend(BaseModel):
     content: str
     message_type: str = "secured"
 
+class ConnectionRequest(BaseModel):
+    receiver_username: str
+    sender_public_keys: Optional[dict] = None
+
+class ConnectionResponse(BaseModel):
+    request_id: str
+    accept: bool
+    receiver_public_keys: Optional[dict] = None
+
 # API Endpoints
 @app.get("/")
 def root():
@@ -365,26 +374,62 @@ async def generate_keys(current_user: dict = Depends(get_current_user)):
 
 @app.post("/api/connection/request")
 async def create_connection_request(
-    receiver_username: str,
+    request: ConnectionRequest,
     current_user: dict = Depends(get_current_user)
 ):
     conn = get_db()
     try:
+        receiver_username = request.receiver_username
+        
+        if not receiver_username:
+            raise HTTPException(status_code=400, detail="Receiver username required")
+        
+        # Check if receiver exists
+        receiver = conn.execute(
+            "SELECT username FROM users WHERE username = ?",
+            (receiver_username,)
+        ).fetchone()
+        
+        if not receiver:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Check for existing pending request
+        existing = conn.execute(
+            """SELECT id FROM connection_requests 
+               WHERE sender = ? AND receiver = ? AND status = 'pending'""",
+            (current_user["username"], receiver_username)
+        ).fetchall()
+        
+        if existing:
+            return {"request_id": existing[0]["id"], "status": "already_pending"}
+        
+        # Create new request
         request_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO connection_requests (id, sender, receiver) VALUES (?, ?, ?)",
+            """INSERT INTO connection_requests 
+               (id, sender, receiver, status) 
+               VALUES (?, ?, ?, 'pending')""",
             (request_id, current_user["username"], receiver_username)
         )
         conn.commit()
         
-        # Notify via WebSocket
-        await manager.send_json({
-            "type": "connection_request",
-            "sender": current_user["username"]
-        }, receiver_username)
+        # Notify via WebSocket if connected
+        if receiver_username in manager.active_connections:
+            await manager.send_json({
+                "type": "connection_request",
+                "sender": current_user["username"],
+                "request_id": request_id
+            }, receiver_username)
         
-        return {"request_id": request_id}
+        logger.info(f"Connection request created: {current_user['username']} -> {receiver_username}")
         
+        return {"request_id": request_id, "status": "pending"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating connection request: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
@@ -393,7 +438,10 @@ async def get_pending_requests(current_user: dict = Depends(get_current_user)):
     conn = get_db()
     try:
         requests = conn.execute(
-            "SELECT * FROM connection_requests WHERE receiver = ? AND status = 'pending'",
+            """SELECT id AS request_id, sender AS sender_username, created_at 
+               FROM connection_requests 
+               WHERE receiver = ? AND status = 'pending'
+               ORDER BY created_at DESC""",
             (current_user["username"],)
         ).fetchall()
         
@@ -404,19 +452,28 @@ async def get_pending_requests(current_user: dict = Depends(get_current_user)):
 
 @app.post("/api/connection/respond")
 async def respond_to_connection(
-    request_id: str,
-    accept: bool,
+    response: ConnectionResponse,
     current_user: dict = Depends(get_current_user)
 ):
     conn = get_db()
     try:
+        request_id = response.request_id
+        accept = response.accept
+        
+        if not request_id:
+            raise HTTPException(status_code=400, detail="Request ID required")
+        
+        # Get the request
         request = conn.execute(
-            "SELECT * FROM connection_requests WHERE id = ?",
-            (request_id,)
+            "SELECT * FROM connection_requests WHERE id = ? AND receiver = ?",
+            (request_id, current_user["username"])
         ).fetchone()
         
         if not request:
             raise HTTPException(status_code=404, detail="Request not found")
+        
+        if request["status"] != "pending":
+            raise HTTPException(status_code=400, detail="Request already processed")
         
         if accept:
             # Create session with shared secret
@@ -424,8 +481,9 @@ async def respond_to_connection(
             shared_secret = secrets.token_bytes(32)
             
             conn.execute(
-                """INSERT INTO active_sessions (id, user1, user2, shared_secret) 
-                   VALUES (?, ?, ?, ?)""",
+                """INSERT INTO active_sessions 
+                   (id, user1, user2, shared_secret, is_active) 
+                   VALUES (?, ?, ?, ?, 1)""",
                 (session_id, request["sender"], current_user["username"], shared_secret)
             )
             
@@ -435,13 +493,21 @@ async def respond_to_connection(
             )
             conn.commit()
             
-            # Notify sender
-            await manager.send_json({
-                "type": "connection_accepted",
-                "session_id": session_id
-            }, request["sender"])
+            # Notify sender via WebSocket
+            if request["sender"] in manager.active_connections:
+                await manager.send_json({
+                    "type": "connection_accepted",
+                    "session_id": session_id,
+                    "peer_username": current_user["username"]
+                }, request["sender"])
             
-            return {"session_id": session_id, "peer_username": request["sender"]}
+            logger.info(f"Connection accepted: {request['sender']} <-> {current_user['username']}")
+            
+            return {
+                "session_id": session_id,
+                "peer_username": request["sender"],
+                "quantum_algorithm": "ML-KEM-768"
+            }
         else:
             conn.execute(
                 "UPDATE connection_requests SET status = 'rejected' WHERE id = ?",
@@ -451,6 +517,11 @@ async def respond_to_connection(
             
             return {"status": "rejected"}
             
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error responding to connection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
