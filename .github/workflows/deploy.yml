@@ -52,6 +52,6 @@ jobs:
       run: |
         python -c "import oqs; print('OQS Version:', oqs.oqs_version())"
     
-    - name: Run quantum crypto tests
+    - name: Test quantum crypto
       run: |
         python -c "from service_quantum import test_quantum_crypto; test_quantum_crypto()"

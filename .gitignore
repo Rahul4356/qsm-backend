@@ -36,3 +36,4 @@ liboqs-python/
 *.pyc
 __pycache__/
 .DS_Store
+qms-deployment/

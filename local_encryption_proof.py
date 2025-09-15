@@ -18,7 +18,7 @@ def main():
     
     try:
         # Import our quantum crypto service
-        from service import (
+        from service_quantum import (
             generate_kem_keypair,
             generate_sig_keypair,
             perform_encapsulation,
