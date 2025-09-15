@@ -41,6 +41,12 @@ print("All imports successful!", file=sys.stderr)
 # Azure Environment Configuration
 IS_PRODUCTION = os.environ.get("WEBSITE_SITE_NAME") is not None
 
+# Debug Azure environment
+print(f"WEBSITE_SITE_NAME: {os.environ.get('WEBSITE_SITE_NAME', 'not set')}", file=sys.stderr)
+print(f"IS_PRODUCTION: {IS_PRODUCTION}", file=sys.stderr)
+print(f"PORT: {os.environ.get('PORT', 'not set')}", file=sys.stderr)
+print(f"Python version: {sys.version}", file=sys.stderr)
+
 # Use Azure-friendly database path
 if IS_PRODUCTION:
     # In Azure, use local storage directory
