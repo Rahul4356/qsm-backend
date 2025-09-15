@@ -1,0 +1,28 @@
+{
+  "timestamp": "2025-09-15T17:25:29.045052",
+  "quantum_algorithms": {
+    "key_exchange": "ML-KEM-768 (NIST Post-Quantum)",
+    "signatures": "Falcon-512 (Quantum-Resistant)",
+    "symmetric_encryption": "AES-256-GCM"
+  },
+  "test_results": {
+    "key_exchange": "FAILED",
+    "encryption_decryption": "SUCCESS",
+    "digital_signatures": "INVALID"
+  },
+  "encryption_proof": {
+    "original_message": "\ud83d\udee1\ufe0f This is a quantum-encrypted message proving end-to-end security! \ud83d\udee1\ufe0f",
+    "encrypted_hex": "1ce701877939ec65febb587c4c32331b0d2fae4c60e79b478d01fc491e224ea52ef0a4962cf47f23434cb15a1f1af55324ecc7bb9ae58c638318d83e0e62335320e99e930e4c78503db592ff958b3fc9",
+    "nonce_hex": "03ad5e13a3933e5db6a017af",
+    "auth_tag_hex": "c41639e3bf332101c4fb6dcf0d4a8071",
+    "decrypted_message": "\ud83d\udee1\ufe0f This is a quantum-encrypted message proving end-to-end security! \ud83d\udee1\ufe0f",
+    "key_sizes": {
+      "ml_kem_public": 1184,
+      "ml_kem_private": 2400,
+      "falcon_public": 897,
+      "falcon_private": 1281,
+      "shared_secret": 32,
+      "signature": 690
+    }
+  }
+}
