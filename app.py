@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Text, Integer, ForeignKey, or_, and_, desc
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-from pydantic import BaseModel, Field, EmailStr, validator
+from pydantic import BaseModel, Field, EmailStr, field_validator
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import jwt
@@ -272,7 +272,8 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=100)
     
-    @validator('username')
+    @field_validator('username')
+    @classmethod
     def username_alphanumeric(cls, v):
         if not v.replace('-', '').replace('_', '').isalnum():
             raise ValueError('Username must be alphanumeric with hyphens or underscores only')
