@@ -1,0 +1,57 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake gcc g++ libssl-dev ninja-build
+    
+    - name: Build and install liboqs
+      run: |
+        git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
+        cd liboqs
+        mkdir build && cd build
+        cmake -GNinja -DBUILD_SHARED_LIBS=ON ..
+        ninja
+        sudo ninja install
+        sudo ldconfig
+        cd ../..
+        rm -rf liboqs
+    
+    - name: Install liboqs-python
+      run: |
+        pip install cython numpy
+        git clone --depth 1 https://github.com/open-quantum-safe/liboqs-python.git
+        cd liboqs-python
+        pip install .
+        cd ..
+        rm -rf liboqs-python
+    
+    - name: Install Python dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Test OQS installation
+      run: |
+        python -c "import oqs; print('OQS Version:', oqs.oqs_version())"
+    
+    - name: Run quantum crypto tests
+      run: |
+        python -c "from service_quantum import test_quantum_crypto; test_quantum_crypto()"
