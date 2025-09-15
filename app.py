@@ -311,7 +311,7 @@ class QuantumCryptoService:
         with oqs.KeyEncapsulation(self.kem_algorithm) as kem:
             public_key = kem.generate_keypair()
             private_key = kem.export_secret_key()
-            public_key = kem.export_public_key()
+            # public_key is already returned by generate_keypair()
         return public_key, private_key
     
     def generate_sig_keypair(self) -> Tuple[bytes, bytes]:
@@ -319,7 +319,7 @@ class QuantumCryptoService:
         with oqs.Signature(self.sig_algorithm) as sig:
             public_key = sig.generate_keypair()
             private_key = sig.export_secret_key()
-            public_key = sig.export_public_key()
+            # public_key is already returned by generate_keypair()
         return public_key, private_key
     
     def encapsulate(self, public_key: bytes) -> Tuple[bytes, bytes]:
