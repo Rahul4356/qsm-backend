@@ -204,20 +204,22 @@ class QuantumCryptoCore:
         except Exception as e:
             raise KeyGenerationError(f"Failed to generate KEM keypair: {e}")
     
-    def generate_sig_keypair(self) -> Dict[str, bytes]:
+    def generate_sig_keypair(self) -> QuantumKeyPair:
         """Generate signature keypair"""
         try:
-            sig = oqs.Signature(self.sig_algorithm)
-            # generate_keypair() returns (public_key, secret_key)
-            public_key, secret_key = sig.generate_keypair()
+            with oqs.Signature(self.sig_algorithm) as sig:
+                # generate_keypair() returns only the public key
+                public_key = sig.generate_keypair()
+                private_key = sig.export_secret_key()
             
-            logger.info(f"Generated signature keypair: pub={len(public_key)} bytes, sec={len(secret_key)} bytes")
+            logger.info(f"Generated signature keypair: pub={len(public_key)} bytes, sec={len(private_key)} bytes")
             
-            return {
-                "public": public_key,
-                "private": secret_key,
-                "algorithm": self.sig_algorithm
-            }
+            return QuantumKeyPair(
+                public_key=public_key,
+                private_key=private_key,
+                algorithm=self.sig_algorithm,
+                generated_at=datetime.utcnow()
+            )
         except Exception as e:
             logger.error(f"Signature keypair generation failed: {e}")
             raise KeyGenerationError(f"Failed to generate signature keypair: {e}")
