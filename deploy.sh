@@ -1,11 +1,11 @@
 #!/bin/bash
+# This runs during Azure deployment
 
-# Simple Azure deployment script
-echo "Azure Deployment: Installing dependencies and starting QMS"
+# Install from pre-built wheel
+pip install liboqs-python-*.whl
 
-# Install dependencies
-pip install --upgrade pip
+# Install other requirements
 pip install -r requirements.txt
 
-# Start the application
-gunicorn --bind=0.0.0.0:8000 --timeout 600 --workers 1 --worker-class uvicorn.workers.UvicornWorker app:app
+# Start the app
+gunicorn --bind=0.0.0.0:8000 --workers=1 --worker-class uvicorn.workers.UvicornWorker app:app
