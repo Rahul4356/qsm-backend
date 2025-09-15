@@ -1,0 +1,40 @@
+#!/bin/bash
+
+echo "🚀 Azure Deployment Fix Script"
+echo "============================="
+
+echo "📋 Step 1: Get Azure Publish Profile"
+echo "Run this command in your terminal:"
+echo ""
+echo "az webapp deployment list-publishing-profiles \\"
+echo "    --name qsm-backend \\"
+echo "    --resource-group qms-rg \\"
+echo "    --xml"
+echo ""
+
+echo "📋 Step 2: Copy the XML output and add to GitHub"
+echo "1. Go to: https://github.com/Rahul4356/qsm-backend/settings/secrets/actions"
+echo "2. Click 'New repository secret'"
+echo "3. Name: AZUREAPPSERVICE_PUBLISHPROFILE_4848AD556E03415CBC5D6ACE9CCABC03"
+echo "4. Value: Paste the entire XML from Step 1"
+echo "5. Click 'Add secret'"
+echo ""
+
+echo "📋 Step 3: Alternative - Manual Deploy (Immediate)"
+echo "If you want to deploy immediately while setting up secrets:"
+echo ""
+echo "# Create deployment package"
+echo "zip -r qms-app.zip . -x '*.git*' '*venv*' '*__pycache__*' '*.DS_Store*'"
+echo ""
+echo "# Deploy directly"
+echo "az webapp deployment source config-zip \\"
+echo "    --resource-group qms-rg \\"
+echo "    --name qsm-backend \\"
+echo "    --src qms-app.zip"
+echo ""
+
+echo "📋 Step 4: Test Deployment"
+echo "curl https://qsm-backend.azurewebsites.net/api/health"
+echo ""
+
+echo "✅ After GitHub secret is added, future pushes will auto-deploy!"
