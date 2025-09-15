@@ -866,9 +866,9 @@ async def test_encryption_live():
     """Live test of encryption/decryption to prove it works"""
     try:
         from service import (
-            generate_ml_kem_keypair, 
-            ml_kem_encapsulate, 
-            ml_kem_decapsulate,
+            generate_kem_keypair,
+            perform_encapsulation,
+            perform_decapsulation,
             encrypt_with_aes_gcm,
             decrypt_with_aes_gcm
         )
@@ -877,11 +877,13 @@ async def test_encryption_live():
         test_message = "🔐 QUANTUM ENCRYPTION TEST - This message proves end-to-end encryption works! 🔐"
         
         # Generate fresh keys
-        public_key, private_key = generate_ml_kem_keypair()
+        kem_keys = generate_kem_keypair("test_user")
+        public_key = kem_keys['public']
+        private_key = kem_keys['private']
         
         # Key exchange
-        shared_secret, ciphertext = ml_kem_encapsulate(public_key)
-        recovered_secret = ml_kem_decapsulate(private_key, ciphertext)
+        ciphertext, shared_secret = perform_encapsulation(public_key)
+        recovered_secret = perform_decapsulation(ciphertext, private_key, public_key)
         
         # Encrypt message
         encrypted_content, nonce, tag = encrypt_with_aes_gcm(test_message.encode(), shared_secret)

@@ -160,7 +160,7 @@ print_info "Creating test user: $TEST_USER"
 
 # Register user
 REGISTER_DATA="{\"username\":\"$TEST_USER\",\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\"}"
-REGISTER_RESPONSE=$(curl -s -X POST "$BASE_URL/api/auth/register" \
+REGISTER_RESPONSE=$(curl -s -X POST "$BASE_URL/api/register" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_DATA")
 
@@ -169,7 +169,7 @@ echo "$REGISTER_RESPONSE" | python3 -m json.tool
 
 # Login to get token
 LOGIN_DATA="{\"username\":\"$TEST_USER\",\"password\":\"$TEST_PASSWORD\"}"
-LOGIN_RESPONSE=$(curl -s -X POST "$BASE_URL/api/auth/login" \
+LOGIN_RESPONSE=$(curl -s -X POST "$BASE_URL/api/login" \
     -H "Content-Type: application/json" \
     -d "$LOGIN_DATA")
 
