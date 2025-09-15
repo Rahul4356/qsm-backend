@@ -188,21 +188,21 @@ class QuantumCryptoCore:
     # Key Generation
     
     def generate_kem_keypair(self) -> QuantumKeyPair:
-    """Generate quantum-safe KEM key pair"""
-    try:
-        with oqs.KeyEncapsulation(self.kem_algorithm) as kem:
-            public_key = kem.generate_keypair()
-            private_key = kem.export_secret_key()
-            # No export_public_key needed - public_key is already returned by generate_keypair()
-        
-        return QuantumKeyPair(
-            public_key=public_key,
-            private_key=private_key,
-            algorithm=self.kem_algorithm,
-            generated_at=datetime.utcnow()
-        )
-    except Exception as e:
-        raise KeyGenerationError(f"Failed to generate KEM keypair: {e}")
+        """Generate quantum-safe KEM key pair"""
+        try:
+            with oqs.KeyEncapsulation(self.kem_algorithm) as kem:
+                public_key = kem.generate_keypair()
+                private_key = kem.export_secret_key()
+                # No export_public_key needed - public_key is already returned by generate_keypair()
+            
+            return QuantumKeyPair(
+                public_key=public_key,
+                private_key=private_key,
+                algorithm=self.kem_algorithm,
+                generated_at=datetime.utcnow()
+            )
+        except Exception as e:
+            raise KeyGenerationError(f"Failed to generate KEM keypair: {e}")
     
     def generate_sig_keypair(self) -> Dict[str, bytes]:
         """Generate signature keypair"""
@@ -283,7 +283,7 @@ class ClassicalCrypto:
     @staticmethod
     def derive_key_pbkdf2(password: bytes, salt: bytes, iterations: int = CryptoConfig.PBKDF2_ITERATIONS) -> bytes:
         """Derive key from password using PBKDF2"""
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
