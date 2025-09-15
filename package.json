@@ -1,0 +1,12 @@
+{
+  "name": "qms-frontend",
+  "version": "3.0.0",
+  "description": "Quantum Messaging System Frontend",
+  "scripts": {
+    "build": "echo 'No build required for static HTML'",
+    "start": "python -m http.server 8080"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
