@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QMS WebSocket Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .messages { height: 200px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; background: #f9f9f9; }
+        input, button { margin: 5px; padding: 8px; }
+        .connected { color: green; }
+        .disconnected { color: red; }
+        .status { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Quantum Messaging System - WebSocket Test</h1>
+        
+        <div class="section">
+            <h3>Connection Status</h3>
+            <p>Server: <span id="serverUrl">ws://localhost:8000</span></p>
+            <p>Status: <span id="status" class="disconnected">Disconnected</span></p>
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>
+        </div>
+
+        <div class="section">
+            <h3>User Authentication</h3>
+            <input type="text" id="username" placeholder="Username (e.g., alice)" value="alice">
+            <input type="password" id="password" placeholder="Password" value="quantum123">
+            <button onclick="login()">Login</button>
+            <p>Token: <span id="token">Not logged in</span></p>
+        </div>
+
+        <div class="section">
+            <h3>WebSocket Connection</h3>
+            <input type="text" id="wsUsername" placeholder="WebSocket Username" value="alice">
+            <button onclick="connectWebSocket()">Connect WebSocket</button>
+            <button onclick="sendHeartbeat()">Send Heartbeat</button>
+        </div>
+
+        <div class="section">
+            <h3>Send Message</h3>
+            <input type="text" id="receiver" placeholder="Receiver" value="bob">
+            <input type="text" id="messageContent" placeholder="Message content" value="Hello from quantum!">
+            <button onclick="sendMessage()">Send Message</button>
+        </div>
+
+        <div class="section">
+            <h3>Messages</h3>
+            <div id="messages" class="messages"></div>
+            <button onclick="clearMessages()">Clear Messages</button>
+        </div>
+
+        <div class="section">
+            <h3>Quick Tests</h3>
+            <button onclick="testHealth()">Test Health</button>
+            <button onclick="testQuantumInfo()">Test Quantum Info</button>
+            <button onclick="generateKeys()">Generate Quantum Keys</button>
+            <button onclick="checkDatabase()">Check Database</button>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let token = null;
+        const serverUrl = document.getElementById('serverUrl').textContent;
+        const apiBase = serverUrl.replace('ws://', 'http://').replace('wss://', 'https://');
+
+        function log(message, type = 'info') {
+            const messages = document.getElementById('messages');
+            const div = document.createElement('div');
+            div.style.color = type === 'error' ? 'red' : type === 'success' ? 'green' : 'black';
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function updateStatus(status, isConnected) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = status;
+            statusEl.className = isConnected ? 'connected' : 'disconnected';
+        }
+
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(`${apiBase}/api/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+                
+                if (data.access_token) {
+                    token = data.access_token;
+                    document.getElementById('token').textContent = token.substring(0, 20) + '...';
+                    log(`Logged in as ${username}`, 'success');
+                } else {
+                    log(`Login failed: ${data.detail}`, 'error');
+                }
+            } catch (error) {
+                log(`Login error: ${error.message}`, 'error');
+            }
+        }
+
+        function connectWebSocket() {
+            const username = document.getElementById('wsUsername').value;
+            
+            if (ws) {
+                ws.close();
+            }
+
+            ws = new WebSocket(`${serverUrl}/ws/${username}`);
+            
+            ws.onopen = () => {
+                updateStatus('Connected', true);
+                log(`WebSocket connected as ${username}`, 'success');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    log(`Received: ${JSON.stringify(data)}`, 'info');
+                } catch (e) {
+                    log(`Received: ${event.data}`, 'info');
+                }
+            };
+
+            ws.onclose = () => {
+                updateStatus('Disconnected', false);
+                log('WebSocket disconnected', 'error');
+            };
+
+            ws.onerror = (error) => {
+                log(`WebSocket error: ${error}`, 'error');
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function sendHeartbeat() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'heartbeat' }));
+                log('Heartbeat sent', 'success');
+            } else {
+                log('WebSocket not connected', 'error');
+            }
+        }
+
+        function sendMessage() {
+            const receiver = document.getElementById('receiver').value;
+            const content = document.getElementById('messageContent').value;
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'message',
+                    receiver: receiver,
+                    content: content,
+                    session_id: 'test-session'
+                };
+                
+                ws.send(JSON.stringify(message));
+                log(`Message sent to ${receiver}: ${content}`, 'success');
+            } else {
+                log('WebSocket not connected', 'error');
+            }
+        }
+
+        async function testHealth() {
+            try {
+                const response = await fetch(`${apiBase}/api/health`);
+                const data = await response.json();
+                log(`Health check: ${JSON.stringify(data)}`, 'success');
+            } catch (error) {
+                log(`Health check failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testQuantumInfo() {
+            try {
+                const response = await fetch(`${apiBase}/api/quantum/info`);
+                const data = await response.json();
+                log(`Quantum info: ${JSON.stringify(data)}`, 'success');
+            } catch (error) {
+                log(`Quantum info failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function generateKeys() {
+            if (!token) {
+                log('Please login first', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${apiBase}/api/quantum/generate-keys`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                log(`Quantum keys: ${JSON.stringify(data)}`, 'success');
+            } catch (error) {
+                log(`Generate keys failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkDatabase() {
+            if (!token) {
+                log('Please login first', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${apiBase}/api/debug/database`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                log(`Database: ${JSON.stringify(data, null, 2)}`, 'success');
+            } catch (error) {
+                log(`Database check failed: ${error.message}`, 'error');
+            }
+        }
+
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+
+        // Auto-connect on page load for testing
+        window.onload = () => {
+            log('QMS WebSocket Test Client loaded', 'success');
+            log('1. Login with credentials (alice/quantum123)', 'info');
+            log('2. Connect WebSocket with username', 'info');
+            log('3. Send messages and test features', 'info');
+        };
+    </script>
+</body>
+</html>
