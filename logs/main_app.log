@@ -1,0 +1,59 @@
+Python version: 3.12.3 (main, Aug 14 2025, 17:47:21) [GCC 13.3.0]
+Starting app...
+FastAPI imported successfully
+FastAPI components imported successfully
+SQLAlchemy imported successfully
+Pydantic imported successfully
+Standard libraries imported successfully
+Cryptography imported successfully
+All imports successful, continuing with app initialization...
+INFO:     Started server process [3620]
+INFO:     Waiting for application startup.
+2025-09-15 03:45:50,247 - app - INFO - QMS Platform starting up in development mode...
+2025-09-15 03:45:50,247 - app - INFO - Database URL: sqlite:////tmp/qms_quantum.db...
+2025-09-15 03:45:50,247 - app - INFO - Quantum API: http://localhost:8001
+2025-09-15 03:45:50,247 - app - INFO - WebSocket Enabled: True
+2025-09-15 03:45:50,247 - app - INFO - QMS Platform ready
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2025-09-15 03:45:51,507 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-09-15 03:45:51,508 - httpx - DEBUG - load_verify_locations cafile='/etc/ssl/certs/ca-certificates.crt'
+2025-09-15 03:45:51,533 - httpcore.connection - DEBUG - connect_tcp.started host='localhost' port=8001 local_address=None timeout=5.0 socket_options=None
+2025-09-15 03:45:51,534 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7efd28ab4440>
+2025-09-15 03:45:51,535 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'GET']>
+2025-09-15 03:45:51,535 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-09-15 03:45:51,535 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'GET']>
+2025-09-15 03:45:51,535 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-09-15 03:45:51,535 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'GET']>
+2025-09-15 03:45:51,536 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Mon, 15 Sep 2025 03:45:51 GMT'), (b'server', b'uvicorn'), (b'content-length', b'124'), (b'content-type', b'application/json')])
+2025-09-15 03:45:51,536 - httpx - INFO - HTTP Request: GET http://localhost:8001/api/health "HTTP/1.1 200 OK"
+2025-09-15 03:45:51,536 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'GET']>
+2025-09-15 03:45:51,536 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-09-15 03:45:51,536 - httpcore.http11 - DEBUG - response_closed.started
+2025-09-15 03:45:51,536 - httpcore.http11 - DEBUG - response_closed.complete
+2025-09-15 03:45:51,536 - httpcore.connection - DEBUG - close.started
+2025-09-15 03:45:51,537 - httpcore.connection - DEBUG - close.complete
+INFO:     127.0.0.1:54702 - "GET /api/health HTTP/1.1" 200 OK
+2025-09-15 03:46:14,496 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-09-15 03:46:14,496 - httpx - DEBUG - load_verify_locations cafile='/etc/ssl/certs/ca-certificates.crt'
+2025-09-15 03:46:14,518 - httpcore.connection - DEBUG - connect_tcp.started host='localhost' port=8001 local_address=None timeout=5.0 socket_options=None
+2025-09-15 03:46:14,519 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7efd268e6840>
+2025-09-15 03:46:14,519 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'GET']>
+2025-09-15 03:46:14,519 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-09-15 03:46:14,519 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'GET']>
+2025-09-15 03:46:14,519 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-09-15 03:46:14,520 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'GET']>
+2025-09-15 03:46:14,520 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Mon, 15 Sep 2025 03:46:14 GMT'), (b'server', b'uvicorn'), (b'content-length', b'124'), (b'content-type', b'application/json')])
+2025-09-15 03:46:14,520 - httpx - INFO - HTTP Request: GET http://localhost:8001/api/health "HTTP/1.1 200 OK"
+2025-09-15 03:46:14,521 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'GET']>
+2025-09-15 03:46:14,521 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-09-15 03:46:14,521 - httpcore.http11 - DEBUG - response_closed.started
+2025-09-15 03:46:14,521 - httpcore.http11 - DEBUG - response_closed.complete
+2025-09-15 03:46:14,521 - httpcore.connection - DEBUG - close.started
+2025-09-15 03:46:14,521 - httpcore.connection - DEBUG - close.complete
+INFO:     127.0.0.1:43162 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2025-09-15 03:46:17,526 - app - INFO - QMS Platform shutting down...
+INFO:     Application shutdown complete.
+INFO:     Finished server process [3620]
