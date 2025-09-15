@@ -36,6 +36,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
         
+      - name: Create startup.txt for Azure
+        run: |
+          echo "gunicorn -w 2 -k uvicorn.workers.UvicornWorker service:app --bind 0.0.0.0:8000 --timeout 600" > startup.txt
+        
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
       - name: Upload artifact for deployment jobs
